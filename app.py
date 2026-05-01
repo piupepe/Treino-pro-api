@@ -1,74 +1,104 @@
 #!/usr/bin/env python3
 """
-TREINO PRO - API SERVER (PRODUCTION READY)
+TREINO PRO - API Server (Production Ready for Render)
 """
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
+import json
 from datetime import datetime
+from anthropic import Anthropic
 import uuid
 from dotenv import load_dotenv
-import anthropic
 
 # ============================================================
-# CONFIGURAÇÃO
+# CONFIG
 # ============================================================
 
 load_dotenv()
-
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 if not ANTHROPIC_API_KEY:
-    raise RuntimeError("❌ ANTHROPIC_API_KEY não configurada")
-
-# Cliente Anthropic (novo padrão)
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    print("❌ ANTHROPIC_API_KEY não configurada")
+    client = None
+else:
+    try:
+        client = Anthropic(api_key=ANTHROPIC_API_KEY)
+        print("✅ Anthropic inicializado")
+    except Exception as e:
+        print(f"❌ Erro Anthropic: {e}")
+        client = None
 
 app = Flask(__name__)
 CORS(app)
 
 # ============================================================
-# STORAGE (TEMPORÁRIO)
+# STORAGE
 # ============================================================
 
-DATA_STORAGE = {
+DATA = {
     "sessions": [],
-    "analysis_history": []
+    "analysis": []
 }
 
-AGENT_CONVERSATION = []
+# ============================================================
+# ROUTES
+# ============================================================
 
-# ============================================================
-# HEALTH CHECK
-# ============================================================
+@app.route("/", methods=["GET"])
+def index():
+    """Root endpoint"""
+    return jsonify({
+        "app": "Treino Pro API",
+        "status": "ok",
+        "endpoints": {
+            "health": "/health",
+            "webhook": "POST /webhook/session",
+            "sessions": "GET /api/sessions",
+            "analysis": "GET /api/analysis",
+            "stats": "GET /api/stats"
+        }
+    })
+
 
 @app.route("/health", methods=["GET"])
 def health():
+    """Health check"""
     return jsonify({
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
-        "sessions": len(DATA_STORAGE["sessions"]),
-        "analysis": len(DATA_STORAGE["analysis_history"])
-    })
+        "sessions": len(DATA["sessions"]),
+        "analysis": len(DATA["analysis"]),
+        "api_configured": bool(ANTHROPIC_API_KEY)
+    }), 200
 
-# ============================================================
-# WEBHOOK - RECEBER SESSÃO
-# ============================================================
 
 @app.route("/webhook/session", methods=["POST"])
-def receive_session():
+def webhook_session():
+    """Receber dados de treino"""
     try:
         data = request.get_json()
 
-        if not data or "session_id" not in data:
-            return jsonify({"error": "session_id obrigatório"}), 400
+        if not data:
+            return jsonify({"error": "no data"}), 400
 
+        if "session_id" not in data:
+            return jsonify({"error": "session_id required"}), 400
+
+        # Armazenar sessão
         data["received_at"] = datetime.now().isoformat()
+        DATA["sessions"].append(data)
 
-        DATA_STORAGE["sessions"].append(data)
+        # Analisar com Claude
+        analysis = analyze_with_claude(data)
 
-        analysis = analyze_session(data)
+        # Armazenar análise
+        DATA["analysis"].append({
+            "session_id": data["session_id"],
+            "timestamp": datetime.now().isoformat(),
+            "analysis": analysis
+        })
 
         return jsonify({
             "status": "received",
@@ -79,121 +109,109 @@ def receive_session():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ============================================================
-# ANÁLISE
-# ============================================================
 
-def analyze_session(session):
+def analyze_with_claude(session):
+    """Analisar sessão com Claude"""
+    if not client:
+        return "Claude não disponível"
+
     try:
-        context = build_context(session)
-        response = call_claude(context)
+        prompt = f"""
+Analise esta sessão de treino:
 
-        record = {
-            "id": str(uuid.uuid4()),
-            "session_id": session["session_id"],
-            "timestamp": datetime.now().isoformat(),
-            "analysis": response
-        }
+Treino: {session.get('workout')}
+Data: {session.get('date')}
+Energia: {session.get('energy')}/10
+Sono: {session.get('sleep')}h
 
-        DATA_STORAGE["analysis_history"].append(record)
+Exercícios:
+{json.dumps(session.get('exercises', []), indent=2, ensure_ascii=False)}
 
-        return response
+Notas: {session.get('notes', 'N/A')}
+
+Forneça análise concisa com:
+1. Status geral (OK/ATENÇÃO/CRÍTICO)
+2. Pontos positivos
+3. Recomendações
+4. Próximos passos
+"""
+
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1000,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        )
+
+        return response.content[0].text
 
     except Exception as e:
         return f"Erro na análise: {str(e)}"
 
-# ============================================================
-# CONTEXTO
-# ============================================================
-
-def build_context(session):
-    recent = DATA_STORAGE["sessions"][-7:]
-
-    avg_energy = (
-        sum(s.get("energy", 5) for s in recent) / len(recent)
-        if recent else 0
-    )
-
-    avg_sleep = (
-        sum(s.get("sleep", 7) for s in recent) / len(recent)
-        if recent else 0
-    )
-
-    return f"""
-Nova sessão de treino:
-
-Treino: {session.get("workout")}
-Data: {session.get("date")}
-Energia: {session.get("energy")}/10
-Sono: {session.get("sleep")}h
-
-Média últimos dias:
-Energia: {avg_energy:.1f}
-Sono: {avg_sleep:.1f}
-
-Analise performance, recuperação e recomende ajustes.
-"""
-
-# ============================================================
-# CLAUDE
-# ============================================================
-
-def call_claude(prompt):
-    system = """
-Você é especialista em treinamento de hipertrofia.
-Analise sessões de treino e dê recomendações objetivas.
-"""
-
-    response = client.messages.create(
-        model="claude-3-5-sonnet-latest",
-        max_tokens=1200,
-        system=system,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    output = ""
-    for block in response.content:
-        if hasattr(block, "text"):
-            output += block.text
-
-    return output.strip()
-
-# ============================================================
-# CONSULTAS
-# ============================================================
 
 @app.route("/api/sessions", methods=["GET"])
 def get_sessions():
-    return jsonify(DATA_STORAGE["sessions"][-10:])
+    """Retornar sessões"""
+    return jsonify({
+        "total": len(DATA["sessions"]),
+        "sessions": DATA["sessions"][-10:]
+    }), 200
 
 
 @app.route("/api/analysis", methods=["GET"])
 def get_analysis():
-    return jsonify(DATA_STORAGE["analysis_history"][-10:])
+    """Retornar análises"""
+    return jsonify({
+        "total": len(DATA["analysis"]),
+        "analyses": DATA["analysis"][-10:]
+    }), 200
 
 
 @app.route("/api/stats", methods=["GET"])
 def get_stats():
-    sessions = DATA_STORAGE["sessions"]
+    """Retornar estatísticas"""
+    sessions = DATA["sessions"]
 
     if not sessions:
-        return jsonify({"error": "sem dados"}), 404
+        return jsonify({
+            "total": 0,
+            "avg_energy": 0,
+            "avg_sleep": 0
+        }), 200
 
     recent = sessions[-7:]
-
     avg_energy = sum(s.get("energy", 5) for s in recent) / len(recent)
     avg_sleep = sum(s.get("sleep", 7) for s in recent) / len(recent)
 
     return jsonify({
         "total_sessions": len(sessions),
-        "avg_energy": round(avg_energy, 1),
-        "avg_sleep": round(avg_sleep, 1)
-    })
+        "avg_energy_7d": round(avg_energy, 1),
+        "avg_sleep_7d": round(avg_sleep, 1),
+        "total_analysis": len(DATA["analysis"])
+    }), 200
+
 
 # ============================================================
-# ENTRYPOINT (LOCAL)
+# ERROR HANDLERS
 # ============================================================
 
-if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({"error": "endpoint not found"}), 404
+
+
+@app.errorhandler(500)
+def server_error(e):
+    return jsonify({"error": "server error"}), 500
+
+
+# ============================================================
+# EXPORT FOR GUNICORN
+# ============================================================
+
+# Gunicorn vai usar isso para rodar
+# Não use app.run() aqui!
