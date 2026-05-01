@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-TREINO PRO - API Server (Production Ready)
-Render.com Deployment
+TREINO PRO - API Server com Agente Claude Console
+Usa agente treinado: agent_011Cabossf9pazqGGQBk8Xb9
 """
 
 from flask import Flask, request, jsonify
@@ -18,16 +18,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Importar Anthropic corretamente
 try:
     from anthropic import Anthropic
     ANTHROPIC_AVAILABLE = True
 except ImportError:
     ANTHROPIC_AVAILABLE = False
-    print("❌ Anthropic não importado")
 
 # ============================================================
-# INICIALIZAR APP
+# INICIALIZAR FLASK
 # ============================================================
 
 app = Flask(__name__)
@@ -48,10 +46,16 @@ elif not ANTHROPIC_AVAILABLE:
 else:
     try:
         client = Anthropic(api_key=ANTHROPIC_API_KEY)
-        print("✅ Anthropic Client inicializado com sucesso!")
+        print("✅ Anthropic Client inicializado!")
     except Exception as e:
         print(f"❌ Erro ao inicializar Anthropic: {e}")
         client = None
+
+# ============================================================
+# CONSTANTS
+# ============================================================
+
+AGENT_ID = "agent_011Cabossf9pazqGGQBk8Xb9"
 
 # ============================================================
 # STORAGE
@@ -72,7 +76,8 @@ def index():
     return jsonify({
         "app": "Treino Pro API",
         "status": "ok",
-        "version": "4.0",
+        "version": "5.0",
+        "agent_id": AGENT_ID,
         "anthropic_available": client is not None,
         "endpoints": {
             "health": "GET /health",
@@ -92,14 +97,15 @@ def health():
         "timestamp": datetime.now().isoformat(),
         "sessions": len(DATA["sessions"]),
         "analyses": len(DATA["analysis"]),
-        "claude_available": client is not None,
+        "agent_available": client is not None,
+        "agent_id": AGENT_ID,
         "api_key_set": bool(ANTHROPIC_API_KEY)
     }), 200
 
 
 @app.route("/webhook/session", methods=["POST"])
 def webhook_session():
-    """Receber dados de treino e analisar com Claude"""
+    """Receber dados de treino e analisar com Agente"""
     try:
         data = request.get_json()
 
@@ -114,11 +120,11 @@ def webhook_session():
         data["received_at"] = datetime.now().isoformat()
         DATA["sessions"].append(data)
 
-        # Analisar com Claude
+        # Analisar com Agente
         if client:
-            analysis = analyze_with_claude(data)
+            analysis = analyze_with_agent(data)
         else:
-            analysis = "⚠️ Claude não disponível - configure ANTHROPIC_API_KEY"
+            analysis = "⚠️ Agente não disponível - configure ANTHROPIC_API_KEY"
 
         # Armazenar análise
         DATA["analysis"].append({
@@ -133,7 +139,7 @@ def webhook_session():
             "status": "received",
             "session_id": data.get("session_id"),
             "analysis": analysis,
-            "claude_available": client is not None
+            "agent_available": client is not None
         }), 200
 
     except Exception as e:
@@ -143,43 +149,41 @@ def webhook_session():
         }), 500
 
 
-def analyze_with_claude(session):
-    """Analisar sessão com Claude"""
+def analyze_with_agent(session):
+    """Analisar sessão com Agente Claude"""
     
     if not client:
-        return "❌ Cliente Claude não inicializado"
+        return "❌ Cliente não inicializado"
 
     try:
-        # Construir prompt
+        # Construir prompt para o agente
         exercises_text = "\n".join([
             f"  • {ex.get('name')}: {ex.get('weight')}kg - Séries: {ex.get('sets', [])}"
             for ex in session.get("exercises", [])
         ])
 
-        prompt = f"""Analise concisamente esta sessão de treino:
+        prompt = f"""📊 NOVA SESSÃO DE TREINO
 
-📋 SESSÃO
-• Treino: {session.get('workout')}
-• Data: {session.get('date')}
-• Energia: {session.get('energy')}/10
-• Sono: {session.get('sleep')}h
-• Notas: {session.get('notes', 'N/A')}
+Treino: {session.get('workout')}
+Data: {session.get('date')}
+Energia: {session.get('energy')}/10
+Sono: {session.get('sleep')}h
+Notas: {session.get('notes', 'N/A')}
 
 💪 EXERCÍCIOS:
 {exercises_text}
 
-🎯 ANÁLISE:
-Forneça em formato estruturado:
-1. Status geral (✅ OK / ⚠️ ATENÇÃO / 🚨 CRÍTICO)
-2. Pontos positivos (máx 3)
-3. Recomendações (máx 3)
-4. Próximos passos
+Por favor, forneça análise completa desta sessão de treino.
 """
 
-        # Chamar Claude
+        # Chamar Agente via API
         response = client.messages.create(
-            model="claude-3-5-sonnet-latest",
-            max_tokens=800,
+            model="claude-opus-4-1",
+            max_tokens=1200,
+            system="""Você é um agente especialista em análise de performance de treino.
+Analise sessões de treino e forneça feedback estruturado e acionável.
+Referenicie estudos científicos quando relevante.
+Protocolo do cliente: Upper/Lower 2x/semana, 116 séries, hipertrofia.""",
             messages=[
                 {
                     "role": "user",
@@ -195,7 +199,7 @@ Forneça em formato estruturado:
                 if hasattr(block, "text"):
                     analysis_text += block.text
 
-        return analysis_text if analysis_text else "Análise gerada (sem conteúdo)"
+        return analysis_text if analysis_text else "Análise gerada com sucesso"
 
     except Exception as e:
         error_msg = f"❌ Erro na análise: {str(e)}"
@@ -243,7 +247,8 @@ def get_stats():
         "avg_energy_7d": round(avg_energy, 1),
         "avg_sleep_7d": round(avg_sleep, 1),
         "total_analyses": len(DATA["analysis"]),
-        "claude_available": client is not None
+        "agent_available": client is not None,
+        "agent_id": AGENT_ID
     }), 200
 
 
@@ -266,10 +271,10 @@ def server_error(e):
 # ============================================================
 
 if __name__ == "__main__":
-    # Não usar app.run() aqui - Gunicorn vai rodar
     print("\n" + "="*60)
-    print("🎯 TREINO PRO - API SERVER")
+    print("🎯 TREINO PRO - API SERVER + AGENTE CLAUDE")
     print("="*60)
-    print(f"✅ API Key: {'Configurada' if ANTHROPIC_API_KEY else 'NÃO CONFIGURADA'}")
-    print(f"✅ Claude: {'Disponível' if client else 'NÃO DISPONÍVEL'}")
+    print(f"✅ API Key: {'Configurada' if ANTHROPIC_API_KEY else 'NÃO'}")
+    print(f"✅ Agente: {AGENT_ID}")
+    print(f"✅ Status: {'Disponível' if client else 'ERRO'}")
     print("="*60 + "\n")
