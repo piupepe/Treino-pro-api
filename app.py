@@ -178,7 +178,7 @@ Forneça em formato estruturado:
 
         # Chamar Claude
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-3-5-sonnet-latest",
             max_tokens=800,
             messages=[
                 {
