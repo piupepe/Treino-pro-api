@@ -178,7 +178,7 @@ Por favor, forneça análise completa desta sessão de treino.
 
         # Chamar Agente via API
         response = client.messages.create(
-            model="claude-opus-4-1",
+            model="claude-sonnet-4-6",
             max_tokens=1200,
             system="""Você é um agente especialista em análise de performance de treino.
 Analise sessões de treino e forneça feedback estruturado e acionável.
