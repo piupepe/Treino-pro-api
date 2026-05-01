@@ -8,7 +8,7 @@ from flask_cors import CORS
 import os
 import json
 from datetime import datetime
-from anthropic import Anthropic
+import anthropic
 import uuid
 from dotenv import load_dotenv
 
@@ -137,7 +137,7 @@ Forneça análise concisa com:
 """
 
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-3-5-sonnet-latest",
             max_tokens=1000,
             messages=[
                 {
