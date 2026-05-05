@@ -16,7 +16,7 @@ CORS(app)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# SUPABASE - DO NOVO PROJETO TREINO_PRO
+# SUPABASE - NOVO PROJETO
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://bldwvlnorigxqdvdqfsu.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsZHd2bG5vcmlneHFkdmRxZnN1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5NDcwMTMsImV4cCI6MjA5MzUyMzAxM30.zKIiRWpWNlD08ugDqqOoaiUuMTnvEmzQFbSSN1z93aQ")
 
@@ -37,7 +37,6 @@ def health():
     """Verifica status da API"""
     supabase_ok = False
     try:
-        # Tentar fazer uma query simples
         response = supabase.table('sessions').select('id').limit(1).execute()
         supabase_ok = True
     except Exception as e:
@@ -51,6 +50,78 @@ def health():
         "supabase_connected": supabase_ok,
         "timestamp": __import__('datetime').datetime.utcnow().isoformat()
     }), 200
+
+# ============================================================
+# PROXY PARA SUPABASE - SESSIONS
+# ============================================================
+
+@app.route('/api/sessions', methods=['GET', 'POST'])
+def proxy_sessions():
+    """Proxy para operações na tabela sessions"""
+    try:
+        if not supabase:
+            return jsonify({"error": "Supabase not connected"}), 500
+        
+        if request.method == 'POST':
+            # INSERT
+            data = request.get_json()
+            result = supabase.table('sessions').insert(data).execute()
+            return jsonify(result.data), 201
+        else:
+            # SELECT com filtros opcionais
+            query = supabase.table('sessions').select('*')
+            
+            # Aplicar order se informado
+            order_by = request.args.get('order_by', 'created_at')
+            desc = request.args.get('desc', 'true').lower() == 'true'
+            query = query.order(order_by, desc=desc)
+            
+            # Aplicar limit
+            limit = int(request.args.get('limit', 10))
+            query = query.limit(limit)
+            
+            result = query.execute()
+            return jsonify(result.data), 200
+    
+    except Exception as e:
+        print(f"❌ Erro em proxy_sessions: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ============================================================
+# PROXY PARA SUPABASE - ANALYSES
+# ============================================================
+
+@app.route('/api/analyses', methods=['GET', 'POST'])
+def proxy_analyses():
+    """Proxy para operações na tabela analyses"""
+    try:
+        if not supabase:
+            return jsonify({"error": "Supabase not connected"}), 500
+        
+        if request.method == 'POST':
+            # INSERT
+            data = request.get_json()
+            result = supabase.table('analyses').insert(data).execute()
+            return jsonify(result.data), 201
+        else:
+            # SELECT com filtros
+            query = supabase.table('analyses').select('*')
+            
+            # Aplicar order
+            order_by = request.args.get('order_by', 'created_at')
+            desc = request.args.get('desc', 'true').lower() == 'true'
+            query = query.order(order_by, desc=desc)
+            
+            # Aplicar limit
+            limit = int(request.args.get('limit', 10))
+            query = query.limit(limit)
+            
+            result = query.execute()
+            return jsonify(result.data), 200
+    
+    except Exception as e:
+        print(f"❌ Erro em proxy_analyses: {e}")
+        return jsonify({"error": str(e)}), 500
 
 # ============================================================
 # WEBHOOK PARA RECEBER TREINO E CHAMAR AGENTE
@@ -83,7 +154,6 @@ def webhook_session():
         # 1. FORMATAR PROMPT PARA O AGENTE
         # ============================================================
         
-        # Tentar parsear exercises se for string JSON
         exercises = exercises_str
         if isinstance(exercises_str, str):
             try:
@@ -91,7 +161,6 @@ def webhook_session():
             except:
                 exercises = exercises_str
         
-        # Formatar exercícios de forma legível
         exercises_text = ""
         if isinstance(exercises, list):
             for ex in exercises:
@@ -157,7 +226,7 @@ Seja direto, objetivo e prático. Use linguagem coloquial.
         # ============================================================
         
         if not supabase:
-            print("⚠️ Supabase não conectado, retornando análise sem salvar")
+            print("⚠️ Supabase não conectado")
             return jsonify({
                 "status": "ok",
                 "analysis": analysis,
@@ -186,7 +255,6 @@ Seja direto, objetivo e prático. Use linguagem coloquial.
             
         except Exception as e:
             print(f"❌ Erro ao salvar no Supabase: {e}")
-            # Retornar análise mesmo se não conseguir salvar
             return jsonify({
                 "status": "ok",
                 "session_id": session_id,
@@ -200,56 +268,6 @@ Seja direto, objetivo e prático. Use linguagem coloquial.
             "error": str(e),
             "status": "error"
         }), 500
-
-# ============================================================
-# ROTA PARA TESTAR SALVAR DIRETO
-# ============================================================
-
-@app.route('/test/save-analysis', methods=['POST'])
-def test_save_analysis():
-    """Testa se consegue salvar no Supabase"""
-    try:
-        data = request.get_json()
-        
-        if not supabase:
-            return jsonify({"error": "Supabase not connected"}), 500
-        
-        result = supabase.table('analyses').insert(data).execute()
-        return jsonify({"status": "ok", "data": result.data}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ============================================================
-# ROTA PARA LISTAR ANÁLISES
-# ============================================================
-
-@app.route('/analyses', methods=['GET'])
-def get_analyses():
-    """Lista últimas análises"""
-    try:
-        if not supabase:
-            return jsonify({"error": "Supabase not connected"}), 500
-        
-        result = supabase.table('analyses').select('*').order('created_at', desc=True).limit(10).execute()
-        return jsonify(result.data), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ============================================================
-# ROTA PARA LISTAR SESSÕES
-# ============================================================
-
-@app.route('/sessions', methods=['GET'])
-def get_sessions():
-    """Lista últimas sessões"""
-    try:
-        if not supabase:
-            return jsonify({"error": "Supabase not connected"}), 500
-        
-        result = supabase.table('sessions').select('*').order('created_at', desc=True).limit(10).execute()
-        return jsonify(result.data), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 # ============================================================
 # MAIN
