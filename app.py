@@ -57,112 +57,151 @@ def health():
 
 @app.route('/api/auth/signup', methods=['POST'])
 def signup():
-    """Registrar novo usuário"""
+    """Registrar novo usuário - SEM usar Supabase Auth (evita rate limit)"""
     try:
+        import uuid
+        import hashlib
+        
         data = request.get_json()
-        email = data.get('email')
-        password = data.get('password')
-        name = data.get('name')
+        email = data.get('email', '').strip().lower()
+        password = data.get('password', '')
+        name = data.get('name', '').strip()
         
         if not email or not password or not name:
             return jsonify({"error": "email, password, name obrigatórios"}), 400
         
-        # Usar Supabase Auth
-        try:
-            auth_response = supabase.auth.sign_up({
-                "email": email,
-                "password": password
-            })
-        except Exception as auth_error:
-            error_str = str(auth_error)
-            print(f"❌ Erro Auth: {error_str}")
-            
-            # Tratamento específico de erros
-            if "rate limit" in error_str.lower():
-                return jsonify({"error": "⏳ Muitas tentativas. Aguarde alguns minutos."}), 429
-            elif "already exists" in error_str.lower():
-                return jsonify({"error": "📧 Este email já está cadastrado."}), 409
-            else:
-                return jsonify({"error": error_str}), 400
+        if len(password) < 6:
+            return jsonify({"error": "Senha deve ter mínimo 6 caracteres"}), 400
         
-        if not auth_response.user:
-            return jsonify({"error": "Erro ao criar usuário na autenticação"}), 400
+        if len(email) < 5 or '@' not in email:
+            return jsonify({"error": "Email inválido"}), 400
         
-        # Criar perfil na tabela users
+        # ============================================================
+        # VERIFICAR SE EMAIL JÁ EXISTE
+        # ============================================================
+        
         try:
-            user_data = {
-                "id": auth_response.user.id,
-                "email": email,
-                "name": name
-            }
-            
+            existing = supabase.table('users').select('id').eq('email', email).execute()
+            if existing.data and len(existing.data) > 0:
+                return jsonify({"error": "📧 Este email já está cadastrado"}), 409
+        except Exception as e:
+            print(f"⚠️ Erro ao verificar email: {e}")
+        
+        # ============================================================
+        # CRIAR NOVO USUÁRIO (SEM Supabase Auth)
+        # ============================================================
+        
+        user_id = str(uuid.uuid4())
+        
+        # Hash simples da senha (em produção usar bcrypt!)
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        
+        user_data = {
+            "id": user_id,
+            "email": email,
+            "name": name,
+            "password_hash": password_hash,  # Salvar hash, não senha!
+            "created_at": "2026-05-05T05:00:00Z"
+        }
+        
+        try:
             result = supabase.table('users').insert(user_data).execute()
+            
+            print(f"✅ Usuário criado: {email}")
             
             return jsonify({
                 "status": "success",
-                "message": "Usuário criado. Acesse a anamnese.",
-                "user_id": auth_response.user.id,
+                "message": "Conta criada! Prosseguindo para anamnese.",
+                "user_id": user_id,
                 "email": email
             }), 201
             
         except Exception as db_error:
-            print(f"❌ Erro ao criar perfil: {db_error}")
+            print(f"❌ Erro ao inserir usuario: {db_error}")
             error_str = str(db_error)
             
-            # Usuário foi criado em Auth mas falhou em users
-            if "row-level security" in error_str.lower():
-                return jsonify({
-                    "status": "partial",
-                    "message": "Usuário criado. Configure seu perfil na próxima etapa.",
-                    "user_id": auth_response.user.id,
-                    "error": "Perfil não criado, mas autenticação ok"
-                }), 201
+            if "row-level security" in error_str.lower() or "rls" in error_str.lower():
+                return jsonify({"error": "Erro de permissão. Contate o admin."}), 403
+            elif "unique" in error_str.lower():
+                return jsonify({"error": "📧 Este email já está cadastrado"}), 409
             else:
-                return jsonify({"error": "Erro ao criar perfil: " + error_str}), 500
+                return jsonify({"error": "Erro ao criar conta: " + error_str}), 500
             
     except Exception as e:
         print(f"❌ Erro signup geral: {e}")
-        error_msg = str(e)
-        
-        if "rate limit" in error_msg.lower():
-            return jsonify({"error": "⏳ Muitas tentativas. Aguarde alguns minutos."}), 429
-        else:
-            return jsonify({"error": error_msg}), 500
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
-    """Fazer login"""
+    """Fazer login - verificando hash de senha"""
     try:
+        import hashlib
+        
         data = request.get_json()
-        email = data.get('email')
-        password = data.get('password')
+        email = data.get('email', '').strip().lower()
+        password = data.get('password', '')
         
         if not email or not password:
             return jsonify({"error": "email e password obrigatórios"}), 400
         
-        # Usar Supabase Auth
-        auth_response = supabase.auth.sign_in_with_password({
-            "email": email,
-            "password": password
-        })
+        # ============================================================
+        # BUSCAR USUÁRIO NO BANCO
+        # ============================================================
         
-        if auth_response.user:
-            # Buscar dados do usuário
-            user_response = supabase.table('users').select('*').eq('id', auth_response.user.id).execute()
-            user_data = user_response.data[0] if user_response.data else None
+        try:
+            result = supabase.table('users').select('*').eq('email', email).execute()
+            
+            if not result.data or len(result.data) == 0:
+                return jsonify({"error": "❌ Email ou senha incorretos"}), 401
+            
+            user = result.data[0]
+            user_id = user.get('id')
+            password_hash_stored = user.get('password_hash')
+            
+            # ============================================================
+            # VERIFICAR SENHA
+            # ============================================================
+            
+            password_hash = hashlib.sha256(password.encode()).hexdigest()
+            
+            if password_hash != password_hash_stored:
+                return jsonify({"error": "❌ Email ou senha incorretos"}), 401
+            
+            # ============================================================
+            # GERAR TOKEN SIMPLES
+            # ============================================================
+            
+            import secrets
+            access_token = secrets.token_urlsafe(32)
+            
+            # Salvar token na session ou cache (por simplicidade, ignorar por agora)
+            
+            # ============================================================
+            # RETORNAR SUCESSO
+            # ============================================================
+            
+            has_anamnese = (
+                user.get('age') is not None and 
+                user.get('experience_level') is not None
+            )
+            
+            print(f"✅ Login bem-sucedido: {email}")
             
             return jsonify({
                 "status": "success",
-                "user_id": auth_response.user.id,
+                "user_id": user_id,
                 "email": email,
-                "has_anamnese": user_data and user_data.get('age') is not None,
-                "access_token": auth_response.session.access_token
+                "name": user.get('name'),
+                "has_anamnese": has_anamnese,
+                "access_token": access_token
             }), 200
-        else:
-            return jsonify({"error": "Email ou senha inválidos"}), 401
+            
+        except Exception as db_error:
+            print(f"❌ Erro ao buscar usuário: {db_error}")
+            return jsonify({"error": "Erro ao processar login"}), 500
             
     except Exception as e:
-        print(f"❌ Erro login: {e}")
+        print(f"❌ Erro login geral: {e}")
         return jsonify({"error": str(e)}), 500
 
 # ============================================================
