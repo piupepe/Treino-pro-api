@@ -68,13 +68,28 @@ def signup():
             return jsonify({"error": "email, password, name obrigatórios"}), 400
         
         # Usar Supabase Auth
-        auth_response = supabase.auth.sign_up({
-            "email": email,
-            "password": password
-        })
+        try:
+            auth_response = supabase.auth.sign_up({
+                "email": email,
+                "password": password
+            })
+        except Exception as auth_error:
+            error_str = str(auth_error)
+            print(f"❌ Erro Auth: {error_str}")
+            
+            # Tratamento específico de erros
+            if "rate limit" in error_str.lower():
+                return jsonify({"error": "⏳ Muitas tentativas. Aguarde alguns minutos."}), 429
+            elif "already exists" in error_str.lower():
+                return jsonify({"error": "📧 Este email já está cadastrado."}), 409
+            else:
+                return jsonify({"error": error_str}), 400
         
-        if auth_response.user:
-            # Criar perfil na tabela users
+        if not auth_response.user:
+            return jsonify({"error": "Erro ao criar usuário na autenticação"}), 400
+        
+        # Criar perfil na tabela users
+        try:
             user_data = {
                 "id": auth_response.user.id,
                 "email": email,
@@ -89,12 +104,30 @@ def signup():
                 "user_id": auth_response.user.id,
                 "email": email
             }), 201
-        else:
-            return jsonify({"error": "Erro ao criar usuário"}), 400
+            
+        except Exception as db_error:
+            print(f"❌ Erro ao criar perfil: {db_error}")
+            error_str = str(db_error)
+            
+            # Usuário foi criado em Auth mas falhou em users
+            if "row-level security" in error_str.lower():
+                return jsonify({
+                    "status": "partial",
+                    "message": "Usuário criado. Configure seu perfil na próxima etapa.",
+                    "user_id": auth_response.user.id,
+                    "error": "Perfil não criado, mas autenticação ok"
+                }), 201
+            else:
+                return jsonify({"error": "Erro ao criar perfil: " + error_str}), 500
             
     except Exception as e:
-        print(f"❌ Erro signup: {e}")
-        return jsonify({"error": str(e)}), 500
+        print(f"❌ Erro signup geral: {e}")
+        error_msg = str(e)
+        
+        if "rate limit" in error_msg.lower():
+            return jsonify({"error": "⏳ Muitas tentativas. Aguarde alguns minutos."}), 429
+        else:
+            return jsonify({"error": error_msg}), 500
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
