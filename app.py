@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-TREINO PRO - Backend Limpo
-Sem SDK pesado - apenas HTTP requests
+TREINO PRO - Backend com QA Loop Rigoroso
 """
 
 import os
@@ -38,11 +37,10 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 # ============================================================
-# SUPABASE HTTP (sem SDK)
+# SUPABASE HTTP
 # ============================================================
 
 def supabase_get(table, **kwargs):
-    """GET request ao Supabase"""
     url = f"{SUPABASE_URL}/rest/v1/{table}"
     headers = {
         "apikey": SUPABASE_KEY,
@@ -58,7 +56,6 @@ def supabase_get(table, **kwargs):
         return None
 
 def supabase_post(table, data):
-    """POST request ao Supabase"""
     url = f"{SUPABASE_URL}/rest/v1/{table}"
     headers = {
         "apikey": SUPABASE_KEY,
@@ -74,7 +71,6 @@ def supabase_post(table, data):
         return None
 
 def supabase_patch(table, data, query):
-    """PATCH request ao Supabase"""
     url = f"{SUPABASE_URL}/rest/v1/{table}{query}"
     headers = {
         "apikey": SUPABASE_KEY,
@@ -97,6 +93,7 @@ def supabase_patch(table, data, query):
 def signup():
     if request.method == 'OPTIONS':
         return '', 204
+    
     try:
         data = request.get_json()
         email = data.get('email', '').strip().lower()
@@ -106,12 +103,10 @@ def signup():
         if not email or not password or not name or len(password) < 6:
             return jsonify({"error": "Dados inválidos"}), 400
         
-        # Verificar se existe
         resp = supabase_get("users", query=f"?email=eq.{email}&select=id")
         if resp and resp.status_code == 200 and resp.json():
             return jsonify({"error": "Email já cadastrado"}), 409
         
-        # Criar
         user_id = str(uuid.uuid4())
         password_hash = hashlib.sha256(password.encode()).hexdigest()
         
@@ -139,6 +134,7 @@ def signup():
 def login():
     if request.method == 'OPTIONS':
         return '', 204
+    
     try:
         data = request.get_json()
         email = data.get('email', '').strip().lower()
@@ -147,7 +143,6 @@ def login():
         if not email or not password:
             return jsonify({"error": "Dados obrigatórios"}), 400
         
-        # Buscar
         resp = supabase_get("users", query=f"?email=eq.{email}&select=*")
         
         if not resp or resp.status_code != 200:
@@ -185,6 +180,7 @@ def login():
 def save_anamnese():
     if request.method == 'OPTIONS':
         return '', 204
+    
     try:
         data = request.get_json()
         user_id = data.get('user_id')
@@ -220,14 +216,57 @@ def get_anamnese(user_id):
         return jsonify({"error": str(e)}), 500
 
 # ============================================================
-# GERADOR DE TREINO
+# HELPER: Parse JSON from Claude
+# ============================================================
+
+def parse_claude_json(text):
+    """Parse JSON from Claude response"""
+    text = text.strip()
+    
+    # Remove markdown
+    while text.startswith('```'):
+        text = text[3:]
+    while text.endswith('```'):
+        text = text[:-3]
+    
+    if text.startswith('json'):
+        text = text[4:]
+    
+    text = text.strip()
+    
+    # Extract JSON
+    start = text.find('{')
+    end = text.rfind('}') + 1
+    
+    if start != -1 and end > start:
+        text = text[start:end]
+    
+    # Fix quotes
+    text = text.replace('"', '"').replace('"', '"')
+    
+    # Fix newlines
+    def fix_multiline(t):
+        pattern = r'"([^"]*)"'
+        def replacer(m):
+            s = m.group(1).replace('\n', ' ').replace('\r', ' ')
+            s = ' '.join(s.split())
+            return f'"{s}"'
+        return re.sub(pattern, replacer, t)
+    
+    text = fix_multiline(text)
+    
+    return json.loads(text.strip())
+
+# ============================================================
+# GERADOR COM QA LOOP RIGOROSO - 3 TENTATIVAS
 # ============================================================
 
 @app.route('/api/treinos/gerar', methods=['POST', 'OPTIONS'])
 def gerar_treino():
-    """Gera treino com Claude"""
+    """Gera treino com QA rigoroso - máx 3 tentativas"""
     if request.method == 'OPTIONS':
         return '', 204
+    
     try:
         data = request.get_json()
         user_id = data.get('user_id')
@@ -241,264 +280,134 @@ def gerar_treino():
         if not ANTHROPIC_API_KEY:
             return jsonify({"error": "API key não configurada"}), 500
         
-        print(f"🎯 Gerando: {split} - {focus}")
+        print(f"\n{'='*60}")
+        print(f"🎯 GERANDO TREINO COM QA RIGOROSO")
+        print(f"Split: {split} | Focus: {focus}")
+        print(f"{'='*60}\n")
         
-        # ============================================================
-        # STAGE 1: Gerar treino
-        # ============================================================
+        treino = None
+        validacao = None
         
-        prompt_gerar = f"""Você é um coach de musculação especializado. Gere um programa de {split} com foco em {focus}.
+        for tentativa in range(1, 4):
+            print(f"\n📝 TENTATIVA {tentativa}/3")
+            print(f"{'─'*60}")
+            
+            # ============================================================
+            # STAGE 1: Gerar
+            # ============================================================
+            
+            prompt_gerar = f"""Gere um treino {split} com foco em {focus}.
+Perfil: {anamnese.get('experience_level')}, {anamnese.get('main_goal')}, {anamnese.get('available_days')} dias/semana
+Lesões: {anamnese.get('injuries', 'nenhuma')}
 
-Perfil:
-- Experiência: {anamnese.get('experience_level')}
-- Objetivo: {anamnese.get('main_goal')}
-- Dias/semana: {anamnese.get('available_days')}
-- Lesões: {anamnese.get('injuries', 'nenhuma')}
-- Sono: {anamnese.get('sleep_hours')}h
-- Equipamento: {anamnese.get('equipment')}
-
-⚠️ IMPORTANTE: Responda APENAS com JSON válido. Nenhum texto antes ou depois.
-Sem markdown, sem comentários, sem explicações.
-
-{{
-  "split": "{split}",
-  "focus": "{focus}",
-  "total_weekly_sets": 76,
-  "periodization": "Linear 10 semanas",
-  "workouts": [
-    {{
-      "day": 1,
-      "name": "UPPER A",
-      "type": "push",
-      "estimated_duration_minutes": 60,
-      "estimated_total_sets": 18,
-      "exercises": [
-        {{
-          "name": "Supino Reto",
-          "sets": 4,
-          "reps": "6-8",
-          "rpe": "8",
-          "rest_seconds": 120,
-          "weight_suggestion": "80kg",
-          "muscle_group": "Peito",
-          "technique_notes": "Descida controlada, contração de 1 segundo"
-        }},
-        {{
-          "name": "Remada Curvada",
-          "sets": 4,
-          "reps": "6-8",
-          "rpe": "8",
-          "rest_seconds": 120,
-          "weight_suggestion": "70kg",
-          "muscle_group": "Costa",
-          "technique_notes": "Cotovelo perto do corpo"
-        }}
-      ]
-    }},
-    {{
-      "day": 2,
-      "name": "LOWER A",
-      "type": "leg",
-      "estimated_duration_minutes": 60,
-      "estimated_total_sets": 18,
-      "exercises": [
-        {{
-          "name": "Leg Press 45 graus",
-          "sets": 4,
-          "reps": "6-8",
-          "rpe": "8",
-          "rest_seconds": 120,
-          "weight_suggestion": "160kg",
-          "muscle_group": "Quads",
-          "technique_notes": "90 graus na amplitude"
-        }}
-      ]
-    }},
-    {{
-      "day": 3,
-      "name": "UPPER B",
-      "type": "push",
-      "estimated_duration_minutes": 60,
-      "estimated_total_sets": 16,
-      "exercises": []
-    }},
-    {{
-      "day": 4,
-      "name": "LOWER B",
-      "type": "leg",
-      "estimated_duration_minutes": 60,
-      "estimated_total_sets": 16,
-      "exercises": []
-    }}
-  ]
-}}"""
-        
-        response_gen = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json"
-            },
-            json={
-                "model": "claude-opus-4-6",
-                "max_tokens": 1500,
-                "messages": [{"role": "user", "content": prompt_gerar}]
-            },
-            timeout=30
-        )
-        
-        if response_gen.status_code != 200:
-            print(f"Claude error: {response_gen.status_code}")
-            return jsonify({"error": f"Claude error: {response_gen.status_code}"}), 500
-        
-        gen_data = response_gen.json()
-        treino_text = gen_data['content'][0]['text']
-        
-        print(f"Raw response length: {len(treino_text)}")
-        
-        # Limpar agressivamente
-        treino_text = treino_text.strip()
-        
-        # Remover markdown
-        while treino_text.startswith('```'):
-            treino_text = treino_text[3:]
-        while treino_text.endswith('```'):
-            treino_text = treino_text[:-3]
-        
-        # Remover 'json' prefix
-        if treino_text.startswith('json'):
-            treino_text = treino_text[4:]
-        
-        treino_text = treino_text.strip()
-        
-        # Extrair entre chaves - method 1
-        start = treino_text.find('{')
-        end = treino_text.rfind('}') + 1
-        
-        if start != -1 and end > start:
-            treino_text = treino_text[start:end]
-        
-        # Limpar aspas problemáticas
-        # Substituir smart quotes por aspas normais
-        treino_text = treino_text.replace('"', '"')  # " → "
-        treino_text = treino_text.replace('"', '"')  # " → "
-        treino_text = treino_text.replace("'", "'")  # ' → '
-        
-        # Remove line breaks dentro de strings
-        
-        # Encontrar todas as strings e remover newlines dentro delas
-        def fix_multiline_strings(text):
-            # Pattern para encontrar strings entre aspas
-            pattern = r'"([^"]*)"'
-            def replacer(match):
-                s = match.group(1)
-                s = s.replace('\n', ' ').replace('\r', ' ')
-                s = s.replace('  ', ' ').strip()
-                return f'"{s}"'
-            return re.sub(pattern, replacer, text)
-        
-        treino_text = fix_multiline_strings(treino_text)
-        
-        treino_text = treino_text.strip()
-        
-        print(f"Cleaned JSON length: {len(treino_text)}")
-        print(f"First 100 chars: {treino_text[:100]}")
-        
-        try:
-            treino = json.loads(treino_text)
-            print("✓ Treino gerado com sucesso")
-        except json.JSONDecodeError as e:
-            print(f"❌ JSON error: {e}")
-            print(f"Error at position {e.pos}: {treino_text[max(0, e.pos-50):e.pos+50]}")
+Responda APENAS JSON: {{"split": "{split}", "focus": "{focus}", "total_weekly_sets": 76, "workouts": [{{"day": 1, "name": "UPPER A", "exercises": [{{"name": "Supino", "sets": 4, "reps": "6-8", "muscle_group": "Peito"}}]}}]}}"""
             
-            # Fallback: retornar treino dummy
-            treino = {
-                "split": split,
-                "focus": focus,
-                "total_weekly_sets": 76,
-                "workouts": [
-                    {
-                        "day": 1,
-                        "name": "UPPER A",
-                        "type": "push",
-                        "estimated_duration_minutes": 60,
-                        "estimated_total_sets": 18,
-                        "exercises": [
-                            {"name": "Supino", "sets": 4, "reps": "6-8", "muscle_group": "Peito"}
-                        ]
-                    }
-                ]
-            }
-            print("Using fallback treino")
-        
-        # ============================================================
-        # STAGE 2: Validar (simples)
-        # ============================================================
-        
-        prompt_validar = f"""Valide este treino rapidamente: {json.dumps(treino)[:300]}
-Responda APENAS: {{"status": "APROVADO", "score": 85, "motivo": "Treino bem estruturado"}}"""
-        
-        response_val = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json"
-            },
-            json={
-                "model": "claude-opus-4-6",
-                "max_tokens": 300,
-                "messages": [{"role": "user", "content": prompt_validar}]
-            },
-            timeout=20
-        )
-        
-        if response_val.status_code == 200:
-            val_data = response_val.json()
-            validacao_text = val_data['content'][0]['text']
+            print("Gerando...")
             
-            validacao_text = validacao_text.strip()
+            response_gen = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json"
+                },
+                json={
+                    "model": "claude-opus-4-6",
+                    "max_tokens": 2000,
+                    "messages": [{"role": "user", "content": prompt_gerar}]
+                },
+                timeout=40
+            )
             
-            # Remover markdown
-            if validacao_text.startswith("```"):
-                validacao_text = validacao_text[3:]
-                if validacao_text.startswith("json"):
-                    validacao_text = validacao_text[4:]
-                if validacao_text.startswith("\n"):
-                    validacao_text = validacao_text[1:]
-            
-            if validacao_text.endswith("```"):
-                validacao_text = validacao_text[:-3]
-            
-            validacao_text = validacao_text.strip()
-            
-            # Extrair JSON
-            start = validacao_text.find('{')
-            end = validacao_text.rfind('}') + 1
-            
-            if start != -1 and end > start:
-                validacao_text = validacao_text[start:end]
+            if response_gen.status_code != 200:
+                print(f"❌ Claude error")
+                if tentativa == 3:
+                    return jsonify({"error": "Claude API error"}), 500
+                continue
             
             try:
-                validacao = json.loads(validacao_text.strip())
-            except json.JSONDecodeError:
-                validacao = {"status": "APROVADO", "score": 80, "motivo": "Treino gerado"}
-        else:
-            validacao = {"status": "APROVADO", "score": 85, "motivo": "Treino gerado"}
-        
-        print(f"✓ Score: {validacao.get('score')}")
+                treino_text = response_gen.json()['content'][0]['text']
+                treino = parse_claude_json(treino_text)
+                print(f"✓ Gerado")
+            except Exception as e:
+                print(f"❌ Parse error: {e}")
+                if tentativa == 3:
+                    return jsonify({"error": "JSON error"}), 500
+                continue
+            
+            # ============================================================
+            # STAGE 2: Validação RIGOROSA
+            # ============================================================
+            
+            prompt_validar = f"""Valide RIGOROSAMENTE:
+- 4 workouts (UPPER A/B, LOWER A/B)?
+- Cada um com 4+ exercícios?
+- Total séries >= 70?
+- Push:Pull >= 1:1.2?
+- Todos campos (sets, reps, rest, rpe)?
+
+Treino: {json.dumps(treino)[:800]}
+
+Responda JSON: {{"status": "APROVADO", "score": 85, "motivo": "OK"}} ou {{"status": "FALHOU", "score": 40, "erros": ["erro"]}}"""
+            
+            print("Validando...")
+            
+            response_val = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json"
+                },
+                json={
+                    "model": "claude-opus-4-6",
+                    "max_tokens": 600,
+                    "messages": [{"role": "user", "content": prompt_validar}]
+                },
+                timeout=30
+            )
+            
+            if response_val.status_code != 200:
+                print(f"❌ Validation error")
+                if tentativa == 3:
+                    return jsonify({"error": "Validation error"}), 500
+                continue
+            
+            try:
+                validacao_text = response_val.json()['content'][0]['text']
+                validacao = parse_claude_json(validacao_text)
+            except Exception as e:
+                print(f"❌ Parse validation error")
+                if tentativa == 3:
+                    return jsonify({"error": "Validation parse error"}), 500
+                continue
+            
+            status = validacao.get('status', 'FALHOU')
+            score = validacao.get('score', 0)
+            
+            print(f"Score: {score}/100 | {status}")
+            
+            if status == 'APROVADO' and score >= 80:
+                print(f"\n✅ APROVADO NA TENTATIVA {tentativa}!\n")
+                
+                return jsonify({
+                    "status": "success",
+                    "treino": treino,
+                    "validacao": validacao,
+                    "tentativas": tentativa
+                }), 201
+            
+            print(f"Erros: {validacao.get('erros', [])[:1]}")
         
         return jsonify({
-            "status": "success",
-            "treino": treino,
-            "validacao": validacao
-        }), 201
+            "status": "error",
+            "message": "3 tentativas falharam",
+            "ultima_validacao": validacao
+        }), 500
         
     except requests.Timeout:
-        return jsonify({"error": "Timeout - Claude demorou"}), 504
+        return jsonify({"error": "Timeout"}), 504
     except Exception as e:
-        print(f"❌ Erro: {e}")
         return jsonify({"error": str(e)}), 500
 
 # ============================================================
@@ -507,10 +416,14 @@ Responda APENAS: {{"status": "APROVADO", "score": 85, "motivo": "Treino bem estr
 
 @app.route('/api/sessions', methods=['GET', 'POST', 'OPTIONS'])
 def sessions():
+    if request.method == 'OPTIONS':
+        return '', 204
     return jsonify({"status": "ok"}), 200
 
 @app.route('/api/analyses', methods=['GET', 'POST', 'OPTIONS'])
 def analyses():
+    if request.method == 'OPTIONS':
+        return '', 204
     return jsonify({"status": "ok"}), 200
 
 # ============================================================
@@ -519,6 +432,5 @@ def analyses():
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
-    print(f"\n🚀 TREINO PRO - Backend Limpo")
-    print(f"Port: {port}\n")
+    print(f"\n🚀 TREINO PRO - QA Rigoroso\n")
     app.run(host='0.0.0.0', port=port, debug=False)
