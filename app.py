@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-TREINO PRO - API Server com Agente Claude Console
-Usa agente treinado: agent_011Cabossf9pazqGGQBk8Xb9
+TREINO PRO - API Server com Supabase
+Render.com Deployment
 """
 
 from flask import Flask, request, jsonify
@@ -13,7 +13,7 @@ import uuid
 from dotenv import load_dotenv
 
 # ============================================================
-# IMPORTS & CONFIG
+# IMPORTS
 # ============================================================
 
 load_dotenv()
@@ -24,12 +24,37 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
+try:
+    from supabase import create_client, Client
+    SUPABASE_AVAILABLE = True
+except ImportError:
+    SUPABASE_AVAILABLE = False
+
 # ============================================================
-# INICIALIZAR FLASK
+# FLASK APP
 # ============================================================
 
 app = Flask(__name__)
 CORS(app)
+
+# ============================================================
+# CONFIGURAÇÃO SUPABASE
+# ============================================================
+
+SUPABASE_URL = os.getenv("SUPABASE_URL") or "https://ulsiumdpepyhjbgzghmg.supabase.co"
+SUPABASE_KEY = os.getenv("SUPABASE_KEY") or "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsc2l1bWRwZXB5aGpiZ3pnaG1nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5NTE3OTQsImV4cCI6MjA5MjUyNzc5NH0.R6fIQRp_SE0e0Jp_PrD1PytXIH8gvACYfxbaN9t2OT4"
+
+supabase: Client = None
+
+if SUPABASE_AVAILABLE:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("✅ Supabase inicializado!")
+    except Exception as e:
+        print(f"❌ Erro Supabase: {e}")
+        supabase = None
+else:
+    print("❌ Supabase SDK não disponível")
 
 # ============================================================
 # CLIENTE ANTHROPIC
@@ -37,34 +62,13 @@ CORS(app)
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-if not ANTHROPIC_API_KEY:
-    print("❌ ANTHROPIC_API_KEY não configurada")
-    client = None
-elif not ANTHROPIC_AVAILABLE:
-    print("❌ Anthropic SDK não disponível")
-    client = None
-else:
+client = None
+if ANTHROPIC_AVAILABLE and ANTHROPIC_API_KEY:
     try:
         client = Anthropic(api_key=ANTHROPIC_API_KEY)
-        print("✅ Anthropic Client inicializado!")
+        print("✅ Anthropic inicializado!")
     except Exception as e:
-        print(f"❌ Erro ao inicializar Anthropic: {e}")
-        client = None
-
-# ============================================================
-# CONSTANTS
-# ============================================================
-
-AGENT_ID = "agent_011Cabossf9pazqGGQBk8Xb9"
-
-# ============================================================
-# STORAGE
-# ============================================================
-
-DATA = {
-    "sessions": [],
-    "analysis": []
-}
+        print(f"❌ Erro Anthropic: {e}")
 
 # ============================================================
 # ROUTES
@@ -76,9 +80,9 @@ def index():
     return jsonify({
         "app": "Treino Pro API",
         "status": "ok",
-        "version": "5.0",
-        "agent_id": AGENT_ID,
-        "anthropic_available": client is not None,
+        "version": "6.0",
+        "supabase_connected": supabase is not None,
+        "claude_available": client is not None,
         "endpoints": {
             "health": "GET /health",
             "webhook": "POST /webhook/session",
@@ -91,165 +95,187 @@ def index():
 
 @app.route("/health", methods=["GET"])
 def health():
-    """Health check endpoint"""
+    """Health check"""
     return jsonify({
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
-        "sessions": len(DATA["sessions"]),
-        "analyses": len(DATA["analysis"]),
-        "agent_available": client is not None,
-        "agent_id": AGENT_ID,
+        "supabase_connected": supabase is not None,
+        "claude_available": client is not None,
         "api_key_set": bool(ANTHROPIC_API_KEY)
     }), 200
 
 
 @app.route("/webhook/session", methods=["POST"])
 def webhook_session():
-    """Receber dados de treino e analisar com Agente"""
+    """Receber treino e armazenar no Supabase"""
     try:
         data = request.get_json()
 
-        # Validar dados
-        if not data:
-            return jsonify({"error": "no data received"}), 400
-
-        if "session_id" not in data:
+        if not data or "session_id" not in data:
             return jsonify({"error": "session_id required"}), 400
 
-        # Armazenar sessão
-        data["received_at"] = datetime.now().isoformat()
-        DATA["sessions"].append(data)
+        # Salvar no Supabase
+        if supabase:
+            try:
+                session_record = {
+                    "session_id": data.get("session_id"),
+                    "date": data.get("date"),
+                    "time": data.get("time", ""),
+                    "workout": data.get("workout"),
+                    "exercises": json.dumps(data.get("exercises", [])),
+                    "energy": data.get("energy"),
+                    "sleep": data.get("sleep"),
+                    "notes": data.get("notes", "")
+                }
 
-        # Analisar com Agente
+                response = supabase.table("sessions").insert(session_record).execute()
+                print(f"✅ Sessão salva no Supabase: {data.get('session_id')}")
+            except Exception as e:
+                print(f"❌ Erro ao salvar no Supabase: {e}")
+
+        # Analisar com Claude
+        analysis = ""
         if client:
-            analysis = analyze_with_agent(data)
-        else:
-            analysis = "⚠️ Agente não disponível - configure ANTHROPIC_API_KEY"
+            analysis = analyze_with_claude(data)
 
-        # Armazenar análise
-        DATA["analysis"].append({
-            "session_id": data.get("session_id"),
-            "date": data.get("date"),
-            "workout": data.get("workout"),
-            "timestamp": datetime.now().isoformat(),
-            "analysis": analysis
-        })
+            # Salvar análise no Supabase
+            if supabase:
+                try:
+                    analysis_record = {
+                        "session_id": data.get("session_id"),
+                        "date": data.get("date"),
+                        "workout": data.get("workout"),
+                        "analysis": analysis,
+                        "model": "claude-sonnet-4-6"
+                    }
+                    supabase.table("analyses").insert(analysis_record).execute()
+                    print(f"✅ Análise salva no Supabase: {data.get('session_id')}")
+                except Exception as e:
+                    print(f"❌ Erro ao salvar análise: {e}")
+        else:
+            analysis = "⚠️ Claude não disponível"
 
         return jsonify({
             "status": "received",
             "session_id": data.get("session_id"),
             "analysis": analysis,
-            "agent_available": client is not None
+            "supabase_saved": supabase is not None
         }), 200
 
     except Exception as e:
         return jsonify({
-            "error": f"Exception: {str(e)}",
+            "error": str(e),
             "type": type(e).__name__
         }), 500
 
 
-def analyze_with_agent(session):
-    """Analisar sessão com Agente Claude"""
-    
+def analyze_with_claude(session):
+    """Analisar com Claude"""
     if not client:
-        return "❌ Cliente não inicializado"
+        return "Claude não disponível"
 
     try:
-        # Construir prompt para o agente
         exercises_text = "\n".join([
             f"  • {ex.get('name')}: {ex.get('weight')}kg - Séries: {ex.get('sets', [])}"
             for ex in session.get("exercises", [])
         ])
 
-        prompt = f"""📊 NOVA SESSÃO DE TREINO
+        prompt = f"""Analise concisamente esta sessão de treino:
 
-Treino: {session.get('workout')}
-Data: {session.get('date')}
-Energia: {session.get('energy')}/10
-Sono: {session.get('sleep')}h
-Notas: {session.get('notes', 'N/A')}
+📋 SESSÃO
+• Treino: {session.get('workout')}
+• Data: {session.get('date')}
+• Energia: {session.get('energy')}/10
+• Sono: {session.get('sleep')}h
 
 💪 EXERCÍCIOS:
 {exercises_text}
 
-Por favor, forneça análise completa desta sessão de treino.
+🎯 Forneça:
+1. Status (✅ OK / ⚠️ ATENÇÃO / 🚨 CRÍTICO)
+2. Pontos positivos (máx 3)
+3. Recomendações (máx 3)
+4. Próximos passos
 """
 
-        # Chamar Agente via API
         response = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=1200,
-            system="""Você é um agente especialista em análise de performance de treino.
-Analise sessões de treino e forneça feedback estruturado e acionável.
-Referenicie estudos científicos quando relevante.
-Protocolo do cliente: Upper/Lower 2x/semana, 116 séries, hipertrofia.""",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}]
         )
 
-        # Extrair resposta
-        analysis_text = ""
+        analysis = ""
         if response.content:
             for block in response.content:
                 if hasattr(block, "text"):
-                    analysis_text += block.text
+                    analysis += block.text
 
-        return analysis_text if analysis_text else "Análise gerada com sucesso"
+        return analysis if analysis else "Análise gerada"
 
     except Exception as e:
-        error_msg = f"❌ Erro na análise: {str(e)}"
-        print(error_msg)
-        return error_msg
+        return f"❌ Erro: {str(e)}"
 
 
 @app.route("/api/sessions", methods=["GET"])
 def get_sessions():
-    """Retornar sessões"""
-    return jsonify({
-        "total": len(DATA["sessions"]),
-        "sessions": DATA["sessions"][-10:]
-    }), 200
+    """Retornar sessões do Supabase"""
+    if not supabase:
+        return jsonify({"error": "Supabase not connected"}), 500
+
+    try:
+        response = supabase.table("sessions").select("*").order("created_at", desc=True).limit(10).execute()
+        return jsonify({
+            "total": len(response.data),
+            "sessions": response.data
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/analysis", methods=["GET"])
 def get_analysis():
-    """Retornar análises"""
-    return jsonify({
-        "total": len(DATA["analysis"]),
-        "analyses": DATA["analysis"][-10:]
-    }), 200
+    """Retornar análises do Supabase"""
+    if not supabase:
+        return jsonify({"error": "Supabase not connected"}), 500
+
+    try:
+        response = supabase.table("analyses").select("*").order("created_at", desc=True).limit(10).execute()
+        return jsonify({
+            "total": len(response.data),
+            "analyses": response.data
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/stats", methods=["GET"])
 def get_stats():
     """Retornar estatísticas"""
-    sessions = DATA["sessions"]
+    if not supabase:
+        return jsonify({"error": "Supabase not connected"}), 500
 
-    if not sessions:
+    try:
+        sessions_response = supabase.table("sessions").select("*").execute()
+        analyses_response = supabase.table("analyses").select("*").execute()
+
+        sessions = sessions_response.data
+        if sessions:
+            recent = sessions[-7:]
+            avg_energy = sum(s.get("energy", 5) for s in recent) / len(recent) if recent else 0
+            avg_sleep = sum(s.get("sleep", 7) for s in recent) / len(recent) if recent else 0
+        else:
+            avg_energy = 0
+            avg_sleep = 0
+
         return jsonify({
-            "total_sessions": 0,
-            "avg_energy": 0,
-            "avg_sleep": 0,
-            "total_analyses": len(DATA["analysis"])
+            "total_sessions": len(sessions),
+            "total_analyses": len(analyses_response.data),
+            "avg_energy_7d": round(avg_energy, 1),
+            "avg_sleep_7d": round(avg_sleep, 1),
+            "supabase_connected": True
         }), 200
-
-    recent = sessions[-7:]
-    avg_energy = sum(s.get("energy", 5) for s in recent) / len(recent) if recent else 0
-    avg_sleep = sum(s.get("sleep", 7) for s in recent) / len(recent) if recent else 0
-
-    return jsonify({
-        "total_sessions": len(sessions),
-        "avg_energy_7d": round(avg_energy, 1),
-        "avg_sleep_7d": round(avg_sleep, 1),
-        "total_analyses": len(DATA["analysis"]),
-        "agent_available": client is not None,
-        "agent_id": AGENT_ID
-    }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================
@@ -263,7 +289,7 @@ def not_found(e):
 
 @app.errorhandler(500)
 def server_error(e):
-    return jsonify({"error": "server error", "message": str(e)}), 500
+    return jsonify({"error": str(e)}), 500
 
 
 # ============================================================
@@ -272,9 +298,9 @@ def server_error(e):
 
 if __name__ == "__main__":
     print("\n" + "="*60)
-    print("🎯 TREINO PRO - API SERVER + AGENTE CLAUDE")
+    print("🎯 TREINO PRO - API + SUPABASE")
     print("="*60)
-    print(f"✅ API Key: {'Configurada' if ANTHROPIC_API_KEY else 'NÃO'}")
-    print(f"✅ Agente: {AGENT_ID}")
-    print(f"✅ Status: {'Disponível' if client else 'ERRO'}")
+    print(f"✅ Supabase: {'Conectado' if supabase else 'ERRO'}")
+    print(f"✅ Claude: {'Disponível' if client else 'NÃO'}")
+    print(f"✅ API Key: {'Sim' if ANTHROPIC_API_KEY else 'NÃO'}")
     print("="*60 + "\n")
