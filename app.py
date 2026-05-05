@@ -15,7 +15,13 @@ import requests
 from datetime import datetime
 
 app = Flask(__name__)
-CORS(app)
+
+# CORS Configuration
+CORS(app, 
+     origins="*",
+     allow_headers=["Content-Type", "Authorization"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+     supports_credentials=False)
 
 # Config
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
@@ -88,6 +94,8 @@ def supabase_patch(table, data, query):
 
 @app.route('/api/auth/signup', methods=['POST', 'OPTIONS'])
 def signup():
+    if request.method == 'OPTIONS':
+        return '', 204
     try:
         data = request.get_json()
         email = data.get('email', '').strip().lower()
@@ -128,6 +136,8 @@ def signup():
 
 @app.route('/api/auth/login', methods=['POST', 'OPTIONS'])
 def login():
+    if request.method == 'OPTIONS':
+        return '', 204
     try:
         data = request.get_json()
         email = data.get('email', '').strip().lower()
@@ -172,6 +182,8 @@ def login():
 
 @app.route('/api/anamnese/save', methods=['POST', 'OPTIONS'])
 def save_anamnese():
+    if request.method == 'OPTIONS':
+        return '', 204
     try:
         data = request.get_json()
         user_id = data.get('user_id')
@@ -213,6 +225,8 @@ def get_anamnese(user_id):
 @app.route('/api/treinos/gerar', methods=['POST', 'OPTIONS'])
 def gerar_treino():
     """Gera treino com Claude"""
+    if request.method == 'OPTIONS':
+        return '', 204
     try:
         data = request.get_json()
         user_id = data.get('user_id')
