@@ -256,8 +256,81 @@ Perfil:
 - Sono: {anamnese.get('sleep_hours')}h
 - Equipamento: {anamnese.get('equipment')}
 
-Responda APENAS com JSON válido (sem markdown, sem comentários):
-{{"split": "{split}", "focus": "{focus}", "total_weekly_sets": 76, "workouts": [{{"day": 1, "name": "UPPER A", "type": "push", "estimated_duration_minutes": 60, "estimated_total_sets": 18, "exercises": [{{"name": "Supino Reto", "sets": 4, "reps": "6-8", "rpe": "8", "rest_seconds": 120, "weight_suggestion": "80kg", "muscle_group": "Peito", "technique_notes": "Descida controlada"}}]}}]}}"""
+⚠️ IMPORTANTE: Responda APENAS com JSON válido. Nenhum texto antes ou depois.
+Sem markdown, sem comentários, sem explicações.
+
+{{
+  "split": "{split}",
+  "focus": "{focus}",
+  "total_weekly_sets": 76,
+  "periodization": "Linear 10 semanas",
+  "workouts": [
+    {{
+      "day": 1,
+      "name": "UPPER A",
+      "type": "push",
+      "estimated_duration_minutes": 60,
+      "estimated_total_sets": 18,
+      "exercises": [
+        {{
+          "name": "Supino Reto",
+          "sets": 4,
+          "reps": "6-8",
+          "rpe": "8",
+          "rest_seconds": 120,
+          "weight_suggestion": "80kg",
+          "muscle_group": "Peito",
+          "technique_notes": "Descida controlada, contração de 1 segundo"
+        }},
+        {{
+          "name": "Remada Curvada",
+          "sets": 4,
+          "reps": "6-8",
+          "rpe": "8",
+          "rest_seconds": 120,
+          "weight_suggestion": "70kg",
+          "muscle_group": "Costa",
+          "technique_notes": "Cotovelo perto do corpo"
+        }}
+      ]
+    }},
+    {{
+      "day": 2,
+      "name": "LOWER A",
+      "type": "leg",
+      "estimated_duration_minutes": 60,
+      "estimated_total_sets": 18,
+      "exercises": [
+        {{
+          "name": "Leg Press 45 graus",
+          "sets": 4,
+          "reps": "6-8",
+          "rpe": "8",
+          "rest_seconds": 120,
+          "weight_suggestion": "160kg",
+          "muscle_group": "Quads",
+          "technique_notes": "90 graus na amplitude"
+        }}
+      ]
+    }},
+    {{
+      "day": 3,
+      "name": "UPPER B",
+      "type": "push",
+      "estimated_duration_minutes": 60,
+      "estimated_total_sets": 16,
+      "exercises": []
+    }},
+    {{
+      "day": 4,
+      "name": "LOWER B",
+      "type": "leg",
+      "estimated_duration_minutes": 60,
+      "estimated_total_sets": 16,
+      "exercises": []
+    }}
+  ]
+}}"""
         
         response_gen = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -281,14 +354,38 @@ Responda APENAS com JSON válido (sem markdown, sem comentários):
         gen_data = response_gen.json()
         treino_text = gen_data['content'][0]['text']
         
-        # Limpar markdown
-        if "```" in treino_text:
-            treino_text = treino_text.split("```")[1]
-            if treino_text.startswith("json"):
-                treino_text = treino_text[4:]
+        # Limpar markdown - melhor
+        treino_text = treino_text.strip()
         
-        treino = json.loads(treino_text.strip())
-        print("✓ Treino gerado")
+        # Remover markdown code blocks
+        if treino_text.startswith("```"):
+            treino_text = treino_text[3:]  # Remove ```
+            if treino_text.startswith("json"):
+                treino_text = treino_text[4:]  # Remove json
+            if treino_text.startswith("\n"):
+                treino_text = treino_text[1:]  # Remove newline
+        
+        if treino_text.endswith("```"):
+            treino_text = treino_text[:-3]
+        
+        treino_text = treino_text.strip()
+        
+        # Extrair JSON entre chaves
+        start = treino_text.find('{')
+        end = treino_text.rfind('}') + 1
+        
+        if start != -1 and end > start:
+            treino_text = treino_text[start:end]
+        
+        treino_text = treino_text.strip()
+        
+        try:
+            treino = json.loads(treino_text)
+            print("✓ Treino gerado")
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON error: {e}")
+            print(f"Text: {treino_text[:200]}")
+            return jsonify({"error": f"JSON parsing error: {str(e)}"}), 500
         
         # ============================================================
         # STAGE 2: Validar (simples)
@@ -316,14 +413,31 @@ Responda APENAS: {{"status": "APROVADO", "score": 85, "motivo": "Treino bem estr
             val_data = response_val.json()
             validacao_text = val_data['content'][0]['text']
             
-            if "```" in validacao_text:
-                validacao_text = validacao_text.split("```")[1]
+            validacao_text = validacao_text.strip()
+            
+            # Remover markdown
+            if validacao_text.startswith("```"):
+                validacao_text = validacao_text[3:]
                 if validacao_text.startswith("json"):
                     validacao_text = validacao_text[4:]
+                if validacao_text.startswith("\n"):
+                    validacao_text = validacao_text[1:]
+            
+            if validacao_text.endswith("```"):
+                validacao_text = validacao_text[:-3]
+            
+            validacao_text = validacao_text.strip()
+            
+            # Extrair JSON
+            start = validacao_text.find('{')
+            end = validacao_text.rfind('}') + 1
+            
+            if start != -1 and end > start:
+                validacao_text = validacao_text[start:end]
             
             try:
                 validacao = json.loads(validacao_text.strip())
-            except:
+            except json.JSONDecodeError:
                 validacao = {"status": "APROVADO", "score": 80, "motivo": "Treino gerado"}
         else:
             validacao = {"status": "APROVADO", "score": 85, "motivo": "Treino gerado"}
