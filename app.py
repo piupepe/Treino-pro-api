@@ -41,8 +41,8 @@ CORS(app)
 # CONFIGURAÇÃO SUPABASE
 # ============================================================
 
-SUPABASE_URL = os.getenv("SUPABASE_URL") or "https://ulsiumdpepyhjbgzghmg.supabase.co"
-SUPABASE_KEY = os.getenv("SUPABASE_KEY") or "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsc2l1bWRwZXB5aGpiZ3pnaG1nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5NTE3OTQsImV4cCI6MjA5MjUyNzc5NH0.R6fIQRp_SE0e0Jp_PrD1PytXIH8gvACYfxbaN9t2OT4"
+SUPABASE_URL = os.getenv("SUPABASE_URL") or "https://bldwvlnorigxqdvdqfsu.supabase.co"
+SUPABASE_KEY = os.getenv("SUPABASE_KEY") or "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsZHd2bG5vcmlneHFkdmRxZnN1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5NDcwMTMsImV4cCI6MjA5MzUyMzAxM30.zKIiRWpWNlD08ugDqqOoaiUuMTnvEmzQFbSSN1z93aQ"
 
 supabase: Client = None
 
