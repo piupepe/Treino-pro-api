@@ -10,7 +10,7 @@ import uuid
 import hashlib
 import secrets
 from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 import anthropic
 from supabase import create_client, Client
 from datetime import datetime
@@ -20,7 +20,16 @@ from datetime import datetime
 # ============================================================
 
 app = Flask(__name__)
-CORS(app)
+
+# ⚠️ CORS - HABILITADO EXPLICITAMENTE
+CORS(app, resources={
+    r"/api/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": False
+    }
+})
 
 # Anthropic
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
@@ -42,6 +51,7 @@ except Exception as e:
 # ============================================================
 
 @app.route('/health', methods=['GET'])
+@cross_origin()
 def health():
     """Verifica status da API"""
     supabase_ok = False
@@ -64,7 +74,8 @@ def health():
 # AUTENTICAÇÃO - ENDPOINTS
 # ============================================================
 
-@app.route('/api/auth/signup', methods=['POST'])
+@app.route('/api/auth/signup', methods=['POST', 'OPTIONS'])
+@cross_origin()
 def signup():
     """Registrar novo usuário - SEM usar Supabase Auth (evita rate limit)"""
     try:
@@ -129,7 +140,8 @@ def signup():
         print(f"❌ Erro signup geral: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/auth/login', methods=['POST'])
+@app.route('/api/auth/login', methods=['POST', 'OPTIONS'])
+@cross_origin()
 def login():
     """Fazer login - verificando hash de senha"""
     try:
@@ -189,7 +201,8 @@ def login():
 # ANAMNESE - ENDPOINTS
 # ============================================================
 
-@app.route('/api/anamnese/save', methods=['POST'])
+@app.route('/api/anamnese/save', methods=['POST', 'OPTIONS'])
+@cross_origin()
 def save_anamnese():
     """Salvar respostas da anamnese"""
     try:
@@ -243,7 +256,8 @@ def save_anamnese():
         print(f"❌ Erro save_anamnese: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/anamnese/get/<user_id>', methods=['GET'])
+@app.route('/api/anamnese/get/<user_id>', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def get_anamnese(user_id):
     """Obter dados da anamnese"""
     try:
@@ -263,7 +277,8 @@ def get_anamnese(user_id):
 # SESSÕES - ENDPOINTS
 # ============================================================
 
-@app.route('/api/sessions', methods=['GET', 'POST'])
+@app.route('/api/sessions', methods=['GET', 'POST', 'OPTIONS'])
+@cross_origin()
 def sessions():
     """GET: listar treinos | POST: salvar novo"""
     try:
@@ -316,7 +331,8 @@ def sessions():
 # ANÁLISES - ENDPOINTS
 # ============================================================
 
-@app.route('/api/analyses', methods=['GET', 'POST'])
+@app.route('/api/analyses', methods=['GET', 'POST', 'OPTIONS'])
+@cross_origin()
 def analyses():
     """GET: listar análises | POST: salvar nova"""
     try:
@@ -563,7 +579,8 @@ Valide AGORA. Responda APENAS com JSON válido.
 # GERADOR DE TREINOS COM QA (MAIN ENDPOINT)
 # ============================================================
 
-@app.route('/api/treinos/gerar', methods=['POST'])
+@app.route('/api/treinos/gerar', methods=['POST', 'OPTIONS'])
+@cross_origin()
 def gerar_treino():
     """
     Gera treino com validação automática (QA Loop)
@@ -710,6 +727,7 @@ if __name__ == '__main__':
     print(f"{'='*60}")
     print(f"✅ Anthropic API: {bool(ANTHROPIC_API_KEY)}")
     print(f"✅ Supabase: {bool(supabase)}")
+    print(f"✅ CORS: HABILITADO")
     print(f"Porta: {port}")
     print(f"{'='*60}\n")
     
