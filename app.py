@@ -1,5 +1,14 @@
+#!/usr/bin/env python3
+# ============================================================
+# TREINO PRO - BACKEND COMPLETO
+# Autenticação + Anamnese + Gerador de Treinos com QA
+# ============================================================
+
 import os
 import json
+import uuid
+import hashlib
+import secrets
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import anthropic
@@ -59,9 +68,6 @@ def health():
 def signup():
     """Registrar novo usuário - SEM usar Supabase Auth (evita rate limit)"""
     try:
-        import uuid
-        import hashlib
-        
         data = request.get_json()
         email = data.get('email', '').strip().lower()
         password = data.get('password', '')
@@ -76,10 +82,7 @@ def signup():
         if len(email) < 5 or '@' not in email:
             return jsonify({"error": "Email inválido"}), 400
         
-        # ============================================================
-        # VERIFICAR SE EMAIL JÁ EXISTE
-        # ============================================================
-        
+        # Verificar se email já existe
         try:
             existing = supabase.table('users').select('id').eq('email', email).execute()
             if existing.data and len(existing.data) > 0:
@@ -87,21 +90,16 @@ def signup():
         except Exception as e:
             print(f"⚠️ Erro ao verificar email: {e}")
         
-        # ============================================================
-        # CRIAR NOVO USUÁRIO (SEM Supabase Auth)
-        # ============================================================
-        
+        # Criar novo usuário
         user_id = str(uuid.uuid4())
-        
-        # Hash simples da senha (em produção usar bcrypt!)
         password_hash = hashlib.sha256(password.encode()).hexdigest()
         
         user_data = {
             "id": user_id,
             "email": email,
             "name": name,
-            "password_hash": password_hash,  # Salvar hash, não senha!
-            "created_at": "2026-05-05T05:00:00Z"
+            "password_hash": password_hash,
+            "created_at": datetime.utcnow().isoformat()
         }
         
         try:
@@ -135,8 +133,6 @@ def signup():
 def login():
     """Fazer login - verificando hash de senha"""
     try:
-        import hashlib
-        
         data = request.get_json()
         email = data.get('email', '').strip().lower()
         password = data.get('password', '')
@@ -144,10 +140,7 @@ def login():
         if not email or not password:
             return jsonify({"error": "email e password obrigatórios"}), 400
         
-        # ============================================================
-        # BUSCAR USUÁRIO NO BANCO
-        # ============================================================
-        
+        # Buscar usuário
         try:
             result = supabase.table('users').select('*').eq('email', email).execute()
             
@@ -158,28 +151,16 @@ def login():
             user_id = user.get('id')
             password_hash_stored = user.get('password_hash')
             
-            # ============================================================
-            # VERIFICAR SENHA
-            # ============================================================
-            
+            # Verificar senha
             password_hash = hashlib.sha256(password.encode()).hexdigest()
             
             if password_hash != password_hash_stored:
                 return jsonify({"error": "❌ Email ou senha incorretos"}), 401
             
-            # ============================================================
-            # GERAR TOKEN SIMPLES
-            # ============================================================
-            
-            import secrets
+            # Gerar token
             access_token = secrets.token_urlsafe(32)
             
-            # Salvar token na session ou cache (por simplicidade, ignorar por agora)
-            
-            # ============================================================
-            # RETORNAR SUCESSO
-            # ============================================================
-            
+            # Verificar se tem anamnese
             has_anamnese = (
                 user.get('age') is not None and 
                 user.get('experience_level') is not None
@@ -218,22 +199,39 @@ def save_anamnese():
         if not user_id:
             return jsonify({"error": "user_id obrigatório"}), 400
         
-        # Atualizar perfil do usuário com dados da anamnese
+        # Dados da anamnese
         anamnese_data = {
             "age": data.get('age'),
+            "gender": data.get('gender'),
             "weight": data.get('weight'),
             "height": data.get('height'),
+            "body_fat": data.get('body_fat'),
             "experience_level": data.get('experience_level'),
+            "strongest_phase": data.get('strongest_phase'),
+            "training_history": data.get('training_history'),
             "main_goal": data.get('main_goal'),
+            "muscle_gain_goal": data.get('muscle_gain_goal'),
+            "fat_loss_goal": data.get('fat_loss_goal'),
             "available_days": data.get('available_days'),
             "session_duration": data.get('session_duration'),
+            "best_training_time": data.get('best_training_time'),
             "equipment": data.get('equipment'),
-            "injuries": data.get('injuries'),
-            "training_history": data.get('training_history'),
-            "preferences": data.get('preferences')
+            "injuries": data.get('injuries', 'Nenhuma'),
+            "injury_history": data.get('injury_history', ''),
+            "medications": data.get('medications', 'Nenhuma'),
+            "sleep_hours": data.get('sleep_hours'),
+            "sleep_quality": data.get('sleep_quality'),
+            "diet": data.get('diet'),
+            "supplements": data.get('supplements'),
+            "stress_level": data.get('stress_level'),
+            "cardio_frequency": data.get('cardio_frequency', 'nao'),
+            "split_preference": data.get('split_preference'),
+            "observations": data.get('observations', '')
         }
         
         result = supabase.table('users').update(anamnese_data).eq('id', user_id).execute()
+        
+        print(f"✅ Anamnese salva: {user_id}")
         
         return jsonify({
             "status": "success",
@@ -262,7 +260,7 @@ def get_anamnese(user_id):
         return jsonify({"error": str(e)}), 500
 
 # ============================================================
-# TREINOS - ENDPOINTS
+# SESSÕES - ENDPOINTS
 # ============================================================
 
 @app.route('/api/sessions', methods=['GET', 'POST'])
@@ -300,12 +298,10 @@ def sessions():
             
             query = supabase.table('sessions').select('*').eq('user_id', user_id)
             
-            # Aplicar order
             order_by = request.args.get('order_by', 'created_at')
             desc = request.args.get('desc', 'true').lower() == 'true'
             query = query.order(order_by, desc=desc)
             
-            # Aplicar limit
             limit = int(request.args.get('limit', 10))
             query = query.limit(limit)
             
@@ -367,218 +363,341 @@ def analyses():
         return jsonify({"error": str(e)}), 500
 
 # ============================================================
-# WEBHOOK - AGENTE IA (ANALISAR TREINO)
+# PROMPTS PARA GERAÇÃO E VALIDAÇÃO DE TREINOS
 # ============================================================
 
-@app.route('/webhook/session', methods=['POST'])
-def webhook_session():
+def get_prompt_gerar_treino(anamnese: dict, split: str, focus: str, tentativa: int = 1) -> str:
+    """Gera prompt para Claude criar treino baseado em anamnese"""
+    
+    correcoes_prev = ""
+    if tentativa > 1:
+        correcoes_prev = f"\n⚠️ TENTATIVA {tentativa}/3 - Aplicar correções da validação anterior se houver.\n"
+    
+    prompt = f"""{correcoes_prev}
+VOCÊ É UM COACH DE MUSCULAÇÃO ESPECIALIZADO EM HIPERTROFIA
+Baseado em: Schoenfeld, Israetel, Zourdos, Helms, Renaissance Periodization
+
+═══════════════════════════════════════════════════════════════
+PERFIL COMPLETO DO USUÁRIO
+═══════════════════════════════════════════════════════════════
+
+DADOS BIOMÉTRICOS:
+  • Nome: {anamnese.get('name', 'N/A')}
+  • Idade: {anamnese.get('age', '?')} anos
+  • Peso: {anamnese.get('weight', '?')}kg
+  • Altura: {anamnese.get('height', '?')}cm
+  • Gordura Corporal: {anamnese.get('body_fat', 'desconhecida')}%
+
+EXPERIÊNCIA:
+  • Tempo treino: {anamnese.get('experience_level', '?')}
+  • Melhor fase: {anamnese.get('strongest_phase', '?')}
+  • Histórico: {anamnese.get('training_history', '?')}
+
+OBJETIVOS:
+  • Objetivo principal: {anamnese.get('main_goal', '?')}
+  • Meta ganho: {anamnese.get('muscle_gain_goal', '?')}kg/12 meses
+  • Meta perda: {anamnese.get('fat_loss_goal', 'nenhuma')}kg
+
+DISPONIBILIDADE:
+  • Dias/semana: {anamnese.get('available_days', '?')} treinos
+  • Duração: {anamnese.get('session_duration', '?')} min/sessão
+  • Melhor horário: {anamnese.get('best_training_time', '?')}
+  • Split preferido: {anamnese.get('split_preference', 'N/A')}
+
+EQUIPAMENTOS:
+  • Local: {anamnese.get('equipment', '?')}
+
+SAÚDE:
+  • Lesões atuais: {anamnese.get('injuries', 'Nenhuma')}
+  • Histórico: {anamnese.get('injury_history', 'nenhum')}
+  • Medicações: {anamnese.get('medications', 'nenhuma')}
+
+RECUPERAÇÃO:
+  • Sono: {anamnese.get('sleep_hours', '?')}h/noite
+  • Qualidade: {anamnese.get('sleep_quality', '?')}
+
+NUTRIÇÃO:
+  • Dieta: {anamnese.get('diet', '?')}
+  • Suplementos: {anamnese.get('supplements', '?')}
+
+ESTILO DE VIDA:
+  • Estresse: {anamnese.get('stress_level', '?')}
+  • Cardio: {anamnese.get('cardio_frequency', 'não especificado')}
+
+OBSERVAÇÕES:
+{anamnese.get('observations', 'Nenhuma')}
+
+═══════════════════════════════════════════════════════════════
+TAREFA
+═══════════════════════════════════════════════════════════════
+
+Gere um programa de {anamnese.get('available_days', 4)} treinos ({split.upper()}) 
+com foco em {focus}.
+
+REQUISITOS:
+1. SEGURANÇA: Respeite TODAS as lesões, sem exercícios que causem dor
+2. PERIODIZAÇÃO: 3 semanas força → 3 hipertrofia → 3 volume → 1 deload
+3. VOLUME: Iniciante 10-12 | Intermediário 12-16 | Avançado 15-20 séries/grupo
+4. PUSH/PULL: Ratio 1:1.2 MÍNIMO com face pulls obrigatórios
+5. ESTRUTURA: Composto pesado → Hipertrofia → Isolado
+6. COMPATIBILIDADE: Horário, sono, histórico personalizado
+
+RESPONDA APENAS COM JSON VÁLIDO (sem markdown):
+
+{{
+  "split": "{split.upper()}",
+  "focus": "{focus}",
+  "total_weekly_sets": <número>,
+  "periodization": "Linear",
+  "periodization_details": "Semana 1-3: força... Semana 4-6: hipertrofia...",
+  "notes": "Notas personalizadas",
+  "warnings": "Avisos sobre lesões",
+  "workouts": [
+    {{
+      "day": 1,
+      "name": "UPPER A",
+      "type": "push",
+      "estimated_duration_minutes": 60,
+      "estimated_total_sets": 18,
+      "exercises": [
+        {{
+          "order": 1,
+          "name": "Nome Exercício",
+          "sets": 4,
+          "reps": "6-8",
+          "rpe": "8-9",
+          "rest_seconds": 120,
+          "weight_suggestion": "80kg",
+          "muscle_group": "Peito",
+          "technique_notes": "Descrição técnica",
+          "progression": "Como progredir"
+        }},
+        ...mais exercícios...
+      ]
+    }},
+    ...Upper B, Lower A, Lower B...
+  ]
+}}
+
+Gere agora. Responda APENAS com JSON válido.
+"""
+    return prompt
+
+def get_prompt_validar_treino(treino: dict, anamnese: dict) -> str:
+    """Gera prompt para validar treino contra critérios científicos"""
+    
+    prompt = f"""
+VOCÊ É UM REVISOR CIENTÍFICO DE PROGRAMAS DE TREINO
+Valide contra: Schoenfeld, Israetel, Zourdos, Helms
+
+USUÁRIO:
+  • Experiência: {anamnese.get('experience_level', '?')}
+  • Objetivo: {anamnese.get('main_goal', '?')}
+  • Dias/semana: {anamnese.get('available_days', '?')}
+  • Lesões: {anamnese.get('injuries', 'Nenhuma')}
+
+TREINO PARA VALIDAR:
+{json.dumps(treino, indent=2)[:2000]}...
+
+═══════════════════════════════════════════════════════════════
+VALIDAÇÃO: Responda cada um com ✅ ou ❌
+═══════════════════════════════════════════════════════════════
+
+VOLUME & FREQUÊNCIA:
+1. Total séries/semana está na range MEV-MRV?
+2. Cada grupo muscular 2-3x/semana?
+3. Volume não sobrecarrega recuperação?
+
+PUSH/PULL:
+4. Ratio push:pull >= 1:1.2?
+5. Pulls incluem vertical E horizontal?
+6. Face pulls inclusos?
+
+PERIODIZAÇÃO:
+7. Tem 3 fases (força, hipertrofia, volume)?
+8. Semana 1-3 usa reps 4-6 (força)?
+9. Semana 4-6 usa reps 6-10 (hipertrofia)?
+10. Semana 10 é deload?
+
+SEGURANÇA:
+11. Respeita TODAS as lesões?
+12. Sem exercícios perigosos para iniciante?
+13. Modificações para limitações?
+
+EXERCÍCIOS:
+14. Cada treino tem 1 composto pesado?
+15. Exercícios complementam (não redundam)?
+16. Ordem: composto → hipertrofia → isolado?
+
+RECUPERAÇÃO:
+17. Volume ajustado pro sono?
+18. Sem mesma musculatura 2 dias seguidos?
+
+OBJETIVO:
+19. Se hipertrofia: reps 6-12, RPE 7-8?
+20. Se força: reps 1-6, RPE 8-9?
+
+═══════════════════════════════════════════════════════════════
+RESPONDA COM JSON (exatamente assim):
+
+Se APROVADO (✅ >= 17/20):
+{{
+  "status": "APROVADO",
+  "score": <80-100>,
+  "motivo": "Treino bem balanceado..."
+}}
+
+Se FALHOU (<17/20):
+{{
+  "status": "FALHOU",
+  "score": <0-79>,
+  "erros": ["Erro 1: descrição", "Erro 2: descrição"],
+  "correcoes": ["Correção 1: o que fazer", "Correção 2: o que fazer"]
+}}
+
+Valide AGORA. Responda APENAS com JSON válido.
+"""
+    return prompt
+
+# ============================================================
+# GERADOR DE TREINOS COM QA (MAIN ENDPOINT)
+# ============================================================
+
+@app.route('/api/treinos/gerar', methods=['POST'])
+def gerar_treino():
     """
-    Recebe dados de uma sessão
-    Chama agente Claude para analisar
-    Salva análise no Supabase
+    Gera treino com validação automática (QA Loop)
+    Tenta até 3x até obter ✅ APROVADO
     """
     try:
         data = request.get_json()
-        
         user_id = data.get('user_id')
-        session_id = data.get('session_id')
-        date = data.get('date')
-        workout = data.get('workout')
-        exercises_str = data.get('exercises', '[]')
-        energy = data.get('energy', 5)
-        sleep = data.get('sleep', 7)
-        notes = data.get('notes', '')
+        anamnese = data.get('anamnese')
+        split = data.get('split', 'upper_lower')
+        focus = data.get('focus', 'hipertrofia')
         
-        if not user_id or not session_id:
-            return jsonify({"error": "user_id e session_id obrigatórios"}), 400
+        if not user_id or not anamnese:
+            return jsonify({"error": "user_id e anamnese obrigatórios"}), 400
         
-        print(f"\n📥 Recebido treino: {workout} (user: {user_id})")
-        
-        # ============================================================
-        # 1. BUSCAR DADOS DO USUÁRIO (ANAMNESE)
-        # ============================================================
-        
-        user_response = supabase.table('users').select('*').eq('id', user_id).execute()
-        user_data = user_response.data[0] if user_response.data else {}
-        
-        print(f"👤 Usuário: {user_data.get('name', 'Desconhecido')}")
+        print(f"\n{'='*60}")
+        print(f"🎯 GERANDO TREINO COM QA")
+        print(f"User: {user_id} | Split: {split} | Focus: {focus}")
+        print(f"{'='*60}")
         
         # ============================================================
-        # 2. FORMATAR EXERCÍCIOS
+        # LOOP: Tenta até 3x
         # ============================================================
         
-        exercises = exercises_str
-        if isinstance(exercises_str, str):
+        for tentativa in range(1, 4):
+            print(f"\n📝 TENTATIVA {tentativa}/3")
+            print(f"{'─'*60}")
+            
+            # STAGE 1: Gerar treino
+            print("Gerando treino com Claude...")
+            
+            prompt_gen = get_prompt_gerar_treino(anamnese, split, focus, tentativa)
+            
+            response_gen = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=4000,
+                messages=[{"role": "user", "content": prompt_gen}]
+            )
+            
+            response_text = response_gen.content[0].text
+            
+            # Limpar markdown
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+            if response_text.startswith("```"):
+                response_text = response_text[3:]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+            
+            response_text = response_text.strip()
+            
             try:
-                exercises = json.loads(exercises_str)
-            except:
-                exercises = exercises_str
-        
-        exercises_text = ""
-        if isinstance(exercises, list):
-            for ex in exercises:
-                if isinstance(ex, dict):
-                    name = ex.get('name', 'Desconhecido')
-                    weight = ex.get('weight', '?')
-                    sets = ex.get('sets', [])
-                    sets_str = " | ".join([str(s) for s in sets]) if sets else "?"
-                    exercises_text += f"\n  • {name}: {weight}kg - {sets_str} reps"
+                treino = json.loads(response_text)
+                print(f"✓ Treino gerado com {len(treino.get('workouts', []))} dias")
+            except json.JSONDecodeError as e:
+                print(f"❌ Erro JSON: {e}")
+                if tentativa == 3:
+                    return jsonify({"error": "Erro ao gerar JSON válido"}), 500
+                continue
+            
+            # STAGE 2: Validar treino
+            print("Validando treino...")
+            
+            prompt_val = get_prompt_validar_treino(treino, anamnese)
+            
+            response_val = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=2000,
+                messages=[{"role": "user", "content": prompt_val}]
+            )
+            
+            response_val_text = response_val.content[0].text.strip()
+            
+            # Limpar markdown
+            if response_val_text.startswith("```json"):
+                response_val_text = response_val_text[7:]
+            if response_val_text.startswith("```"):
+                response_val_text = response_val_text[3:]
+            if response_val_text.endswith("```"):
+                response_val_text = response_val_text[:-3]
+            
+            response_val_text = response_val_text.strip()
+            
+            try:
+                validacao = json.loads(response_val_text)
+            except json.JSONDecodeError as e:
+                print(f"❌ Erro validação JSON: {e}")
+                if tentativa == 3:
+                    return jsonify({"error": "Erro ao validar treino"}), 500
+                continue
+            
+            # Verificar resultado
+            status = validacao.get('status', 'FALHOU')
+            score = validacao.get('score', 0)
+            
+            print(f"Score: {score}/100 | Status: {status}")
+            
+            if status == 'APROVADO' and score >= 80:
+                print(f"\n✅ APROVADO NA TENTATIVA {tentativa}!")
+                print(f"{'='*60}\n")
+                
+                return jsonify({
+                    "status": "success",
+                    "treino": treino,
+                    "validacao": validacao,
+                    "tentativas": tentativa,
+                    "message": f"Treino gerado e aprovado com score {score}/100"
+                }), 201
+            
+            else:
+                print(f"❌ Falhou")
+                erros = validacao.get('erros', [])
+                correcoes = validacao.get('correcoes', [])
+                
+                if len(erros) > 0:
+                    print(f"Erros: {erros[0]}")
+                
+                if tentativa < 3:
+                    print(f"Tentando novamente...")
+                    anamnese['ultima_correcao'] = json.dumps(correcoes)
                 else:
-                    exercises_text += f"\n  • {ex}"
-        else:
-            exercises_text = str(exercises)
+                    print(f"\n❌ FALHA FINAL: 3 tentativas concluídas")
+                    return jsonify({
+                        "status": "error",
+                        "message": "Não consegui gerar treino balanceado após 3 tentativas",
+                        "ultima_validacao": validacao,
+                        "tentativas": 3
+                    }), 500
         
-        # ============================================================
-        # 3. CONSTRUIR PROMPT MELHORADO COM CONTEXTO
-        # ============================================================
-        
-        prompt = f"""
-Você é um personal trainer IA especializado em hipertrofia, baseado em ciência
-(Schoenfeld, Israetel, Zourdos, Helms).
-
-CONTEXTO DO USUÁRIO:
-- Nome: {user_data.get('name', 'N/A')}
-- Idade: {user_data.get('age', 'N/A')} anos
-- Peso: {user_data.get('weight', 'N/A')} kg
-- Altura: {user_data.get('height', 'N/A')} cm
-- Experiência: {user_data.get('experience_level', 'N/A')}
-- Objetivo: {user_data.get('main_goal', 'N/A')}
-- Dias disponíveis: {user_data.get('available_days', 'N/A')}/semana
-- Duração: {user_data.get('session_duration', 'N/A')} min
-- Equipamentos: {user_data.get('equipment', 'N/A')}
-- Lesões/Limitações: {user_data.get('injuries', 'Nenhuma')}
-
-TREINO REALIZADO:
-- Data: {date}
-- Treino: {workout}
-- Energia: {energy}/10
-- Sono: {sleep}h
-- Notas: {notes if notes else 'Nenhuma'}
-
-EXERCÍCIOS EXECUTADOS:{exercises_text}
-
-ANÁLISE DETALHADA NECESSÁRIA:
-
-1. **Avaliação Geral & RPE**
-   - Como foi o treino comparado ao esperado?
-   - Estime o RPE (Rate of Perceived Exertion) = taxa de esforço percebido
-   - Há sinais de fadiga excessiva ou fraco estímulo?
-
-2. **Volume & Intensidade**
-   - Total de séries e reps
-   - Está na faixa MEV (Minimum Effective Volume)?
-   - Está próximo de MRV (Maximum Recoverable Volume)?
-   - Análise por grupo muscular
-
-3. **Padrão de Execução**
-   - Quais exercícios tiveram boa performance?
-   - Quais mostraram fadiga/queda de reps?
-   - Há desequilíbrios entre agonistas/antagonistas?
-
-4. **Recuperação & Contexto**
-   - Energia ({energy}/10) + Sono ({sleep}h) = capacidade de recuperação?
-   - Sinais de overtraining ou subtreinamento?
-   - Recomende ajustes baseado no contexto
-
-5. **Progressão Prescrita**
-   - Se completou bem: próxima carga/volume
-   - Se ficou pesado: como ajustar
-   - Próximo treino: que foco ter?
-
-6. **Recomendações Específicas**
-   - Forma técnica (se possível detectar)
-   - Tempo de descanso entre séries
-   - Necessidade de deload?
-   - Inserção de novos exercícios?
-
-7. **Avisos & Prevenção**
-   - Sinais de lesão em potencial?
-   - Desequilíbrios musculares?
-   - Recomendações de mobilidade?
-
-FORMATO:
-- Use tabelas, emojis, números para clareza
-- Conclusões ANTES de explicações longas
-- Sempre feche com PRÓXIMAS AÇÕES concretas
-- Seja direto e prescritivo
-- Considere o contexto de vida do usuário (sono, energia, experiência)
-
-Análise completa agora:
-"""
-        
-        print(f"🤖 Chamando agente Claude...")
-        
-        # ============================================================
-        # 4. CHAMAR AGENTE CLAUDE
-        # ============================================================
-        
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=2000,
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-        )
-        
-        analysis = response.content[0].text
-        tokens_used = response.usage.input_tokens + response.usage.output_tokens
-        
-        print(f"✅ Análise gerada: {tokens_used} tokens")
-        
-        # ============================================================
-        # 5. SALVAR NO SUPABASE
-        # ============================================================
-        
-        if not supabase:
-            print("⚠️ Supabase não conectado")
-            return jsonify({
-                "status": "ok",
-                "analysis": analysis,
-                "warning": "Supabase not connected"
-            }), 200
-        
-        try:
-            analysis_data = {
-                "user_id": user_id,
-                "session_id": session_id,
-                "date": date,
-                "workout": workout,
-                "analysis": analysis,
-                "model": "claude-sonnet-4-6",
-                "tokens_used": tokens_used
-            }
-            
-            print(f"💾 Salvando análise no Supabase...")
-            result = supabase.table('analyses').insert(analysis_data).execute()
-            print(f"✅ Análise salva")
-            
-            return jsonify({
-                "status": "ok",
-                "session_id": session_id,
-                "analysis_saved": True,
-                "tokens_used": tokens_used,
-                "message": "Análise gerada e salva com sucesso"
-            }), 200
-            
-        except Exception as e:
-            print(f"❌ Erro ao salvar no Supabase: {e}")
-            return jsonify({
-                "status": "ok",
-                "session_id": session_id,
-                "analysis": analysis,
-                "tokens_used": tokens_used,
-                "warning": f"Análise gerada mas não foi salva: {str(e)}"
-            }), 200
-    
     except Exception as e:
-        print(f"❌ Erro ao processar webhook: {e}")
-        return jsonify({
-            "error": str(e),
-            "status": "error"
-        }), 500
+        print(f"\n❌ Erro geral: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 # ============================================================
 # MAIN
@@ -586,7 +705,12 @@ Análise completa agora:
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
-    print(f"\n🚀 Iniciando Treino Pro API Premium na porta {port}")
-    print(f"✅ Anthropic API Key: {bool(ANTHROPIC_API_KEY)}")
-    print(f"🔌 Supabase URL: {SUPABASE_URL}")
+    print(f"\n{'='*60}")
+    print(f"🚀 TREINO PRO - BACKEND PREMIUM")
+    print(f"{'='*60}")
+    print(f"✅ Anthropic API: {bool(ANTHROPIC_API_KEY)}")
+    print(f"✅ Supabase: {bool(supabase)}")
+    print(f"Porta: {port}")
+    print(f"{'='*60}\n")
+    
     app.run(host='0.0.0.0', port=port, debug=False)
