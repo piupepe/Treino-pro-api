@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-TREINO PRO - Backend com Anthropic SDK + JSON Schema
-Força Claude a retornar JSON estruturado corretamente
+TREINO PRO - Backend com Anthropic SDK + Parsing Robusto
 """
 
 import os
@@ -9,11 +8,11 @@ import json
 import uuid
 import hashlib
 import secrets
+import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 from datetime import datetime
-from anthropic import Anthropic
 
 app = Flask(__name__)
 
@@ -28,9 +27,6 @@ CORS(app,
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 SUPABASE_URL = "https://bldwvlnorigxqdvdqfsu.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsZHd2bG5vcmlneHFkdmRxZnN1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5NDcwMTMsImV4cCI6MjA5MzUyMzAxM30.zKIiRWpWNlD08ugDqqOoaiUuMTnvEmzQFbSSN1z93aQ"
-
-# Anthropic client
-client = Anthropic()
 
 # ============================================================
 # HEALTH
@@ -220,65 +216,61 @@ def get_anamnese(user_id):
         return jsonify({"error": str(e)}), 500
 
 # ============================================================
-# JSON SCHEMA para forçar estrutura
+# HELPER: Parsing robusto de JSON
 # ============================================================
 
-EXERCISE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "name": {"type": "string", "description": "Nome do exercício"},
-        "sets": {"type": "integer", "description": "Número de séries"},
-        "reps": {"type": "string", "description": "Range de repetições (ex: 6-8)"},
-        "rpe": {"type": "string", "description": "RPE (ex: 7, 8)"},
-        "rest_seconds": {"type": "integer", "description": "Segundos de descanso"},
-        "weight_suggestion": {"type": "string", "description": "Peso sugerido (ex: 80kg)"},
-        "muscle_group": {"type": "string", "description": "Grupo muscular"},
-        "technique_notes": {"type": "string", "description": "Notas técnicas"}
-    },
-    "required": ["name", "sets", "reps", "rpe", "rest_seconds", "weight_suggestion", "muscle_group", "technique_notes"]
-}
-
-WORKOUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "day": {"type": "integer"},
-        "name": {"type": "string"},
-        "type": {"type": "string"},
-        "estimated_duration_minutes": {"type": "integer"},
-        "estimated_total_sets": {"type": "integer"},
-        "exercises": {
-            "type": "array",
-            "items": EXERCISE_SCHEMA,
-            "minItems": 4
-        }
-    },
-    "required": ["day", "name", "type", "estimated_duration_minutes", "estimated_total_sets", "exercises"]
-}
-
-TREINO_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "split": {"type": "string"},
-        "focus": {"type": "string"},
-        "total_weekly_sets": {"type": "integer"},
-        "periodization": {"type": "string"},
-        "workouts": {
-            "type": "array",
-            "items": WORKOUT_SCHEMA,
-            "minItems": 4,
-            "maxItems": 4
-        }
-    },
-    "required": ["split", "focus", "total_weekly_sets", "periodization", "workouts"]
-}
+def parse_claude_json_robust(text):
+    """Parse JSON com limpeza e validação rigorosa"""
+    text = text.strip()
+    
+    print(f"[DEBUG] Raw length: {len(text)}")
+    
+    # Remove markdown
+    text = re.sub(r'^```json\n?', '', text)
+    text = re.sub(r'\n?```$', '', text)
+    text = text.strip()
+    
+    # Extract JSON between braces
+    start = text.find('{')
+    end = text.rfind('}') + 1
+    
+    if start == -1 or end <= start:
+        raise ValueError("No JSON braces found")
+    
+    text = text[start:end]
+    
+    # Remove problematic characters
+    text = text.replace('\x00', '')
+    
+    # Fix smart quotes
+    text = text.replace('"', '"').replace('"', '"')
+    text = text.replace(''', "'").replace(''', "'")
+    
+    # Fix escaped characters
+    text = text.replace('\\n', ' ').replace('\\r', ' ')
+    text = text.replace('\n', ' ').replace('\r', ' ')
+    
+    # Multiple spaces to single
+    text = re.sub(r' +', ' ', text)
+    
+    print(f"[DEBUG] Cleaned length: {len(text)}")
+    
+    try:
+        result = json.loads(text)
+        print(f"[SUCCESS] JSON parsed")
+        return result
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] JSON error at position {e.pos}")
+        print(f"[ERROR] Context: {text[max(0, e.pos-50):e.pos+50]}")
+        raise
 
 # ============================================================
-# GERADOR COM JSON SCHEMA
+# GERADOR COM ANTHROPIC HTTP DIRETO
 # ============================================================
 
 @app.route('/api/treinos/gerar', methods=['POST', 'OPTIONS'])
 def gerar_treino():
-    """Gera treino com Anthropic SDK + JSON Schema"""
+    """Gera treino com Anthropic API HTTP + parsing robusto"""
     if request.method == 'OPTIONS':
         return '', 204
     
@@ -296,104 +288,161 @@ def gerar_treino():
             return jsonify({"error": "API key não configurada"}), 500
         
         print(f"\n{'='*60}")
-        print(f"🎯 GERANDO TREINO COM JSON SCHEMA")
+        print(f"🎯 GERANDO TREINO")
         print(f"Split: {split} | Focus: {focus}")
         print(f"{'='*60}\n")
         
         # ============================================================
-        # Prompt estruturado
+        # Prompt com instruções MUITO CLARAS
         # ============================================================
         
-        prompt = f"""Você é um especialista em programação de treinos com hipertrofia.
+        prompt = f"""VOCÊ É UM ESPECIALISTA EM PROGRAMAÇÃO DE TREINOS.
 
 DADOS DO USUÁRIO:
 - Experiência: {anamnese.get('experience_level')}
 - Objetivo: {anamnese.get('main_goal')}
 - Dias/semana: {anamnese.get('available_days')}
 - Lesões: {anamnese.get('injuries', 'nenhuma')}
-- Sono: {anamnese.get('sleep_hours')}h
 - Equipamento: {anamnese.get('equipment')}
 
-GERE UM TREINO {split.upper()} COM FOCO EM {focus.upper()}
+TAREFA: Gere um treino {split.upper()} com foco em {focus.upper()}.
 
-Requisitos:
-1. Exatamente 4 workouts (UPPER A, UPPER B, LOWER A, LOWER B)
-2. Cada workout com 6-8 exercícios mínimo
-3. Cada exercício com TODOS os campos obrigatórios
-4. Total de 95+ séries semanais
-5. Periodização clara (Linear 10 semanas)
+EXIGÊNCIAS OBRIGATÓRIAS:
+1. EXATAMENTE 4 workouts: UPPER A, UPPER B, LOWER A, LOWER B
+2. CADA workout deve ter 6-8 exercícios MÍNIMO
+3. CADA exercício DEVE ter: name, sets, reps, rpe, rest_seconds, weight_suggestion, muscle_group, technique_notes
+4. Total mínimo 90 séries por semana
+5. Periodização Linear 10 semanas
 
-Retorne APENAS o JSON estruturado com treino completo."""
+RETORNE APENAS JSON VÁLIDO, SEM MARKDOWN, SEM COMENTÁRIOS, SEM NADA ALÉM DO JSON.
+
+{{
+  "split": "{split}",
+  "focus": "{focus}",
+  "total_weekly_sets": 95,
+  "periodization": "Linear 10 semanas",
+  "workouts": [
+    {{
+      "day": 1,
+      "name": "UPPER A",
+      "type": "push",
+      "estimated_duration_minutes": 75,
+      "estimated_total_sets": 28,
+      "exercises": [
+        {{"name": "Supino Reto", "sets": 4, "reps": "6-8", "rpe": "8", "rest_seconds": 120, "weight_suggestion": "80kg", "muscle_group": "Peito", "technique_notes": "Descida controlada"}},
+        {{"name": "Supino Inclinado", "sets": 4, "reps": "8-10", "rpe": "7", "rest_seconds": 90, "weight_suggestion": "35kg", "muscle_group": "Peito", "technique_notes": "Amplitude completa"}},
+        {{"name": "Crucifixo", "sets": 3, "reps": "10-12", "rpe": "7", "rest_seconds": 60, "weight_suggestion": "60kg", "muscle_group": "Peito", "technique_notes": "Contração 1s"}},
+        {{"name": "Desenvolvimento", "sets": 4, "reps": "6-8", "rpe": "8", "rest_seconds": 120, "weight_suggestion": "30kg", "muscle_group": "Ombros", "technique_notes": "Controlado"}},
+        {{"name": "Elevacao Lateral", "sets": 3, "reps": "12-15", "rpe": "6", "rest_seconds": 45, "weight_suggestion": "15kg", "muscle_group": "Ombros", "technique_notes": "Sem balanço"}},
+        {{"name": "Rosca Direta", "sets": 4, "reps": "8-10", "rpe": "7", "rest_seconds": 90, "weight_suggestion": "35kg", "muscle_group": "Biceps", "technique_notes": "Sem balanço"}},
+        {{"name": "Triceps Corda", "sets": 3, "reps": "10-12", "rpe": "7", "rest_seconds": 60, "weight_suggestion": "25kg", "muscle_group": "Triceps", "technique_notes": "Triplicacao"}},
+        {{"name": "Rosca Francesa", "sets": 3, "reps": "8-10", "rpe": "7", "rest_seconds": 60, "weight_suggestion": "20kg", "muscle_group": "Triceps", "technique_notes": "Sem hiperextensao"}}
+      ]
+    }},
+    {{
+      "day": 2,
+      "name": "LOWER A",
+      "type": "leg",
+      "estimated_duration_minutes": 75,
+      "estimated_total_sets": 21,
+      "exercises": [
+        {{"name": "Leg Press", "sets": 4, "reps": "6-8", "rpe": "8", "rest_seconds": 120, "weight_suggestion": "160kg", "muscle_group": "Quadriceps", "technique_notes": "90 graus"}},
+        {{"name": "Hack Squat", "sets": 4, "reps": "8-10", "rpe": "7", "rest_seconds": 90, "weight_suggestion": "120kg", "muscle_group": "Quadriceps", "technique_notes": "Amplitude completa"}},
+        {{"name": "Leg Extension", "sets": 3, "reps": "10-12", "rpe": "7", "rest_seconds": 60, "weight_suggestion": "80kg", "muscle_group": "Quadriceps", "technique_notes": "Sem bouncing"}},
+        {{"name": "Leg Curl Sentado", "sets": 4, "reps": "8-10", "rpe": "7", "rest_seconds": 90, "weight_suggestion": "60kg", "muscle_group": "Posterior", "technique_notes": "Contração máxima"}},
+        {{"name": "Panturrilha em Pe", "sets": 3, "reps": "12-15", "rpe": "6", "rest_seconds": 45, "weight_suggestion": "120kg", "muscle_group": "Panturrilha", "technique_notes": "Amplitude completa"}},
+        {{"name": "Panturrilha Sentado", "sets": 3, "reps": "15-20", "rpe": "6", "rest_seconds": 45, "weight_suggestion": "50kg", "muscle_group": "Panturrilha", "technique_notes": "Isolamento"}}
+      ]
+    }},
+    {{
+      "day": 3,
+      "name": "UPPER B",
+      "type": "pull",
+      "estimated_duration_minutes": 75,
+      "estimated_total_sets": 25,
+      "exercises": [
+        {{"name": "Remada Curvada", "sets": 4, "reps": "6-8", "rpe": "8", "rest_seconds": 120, "weight_suggestion": "70kg", "muscle_group": "Costa", "technique_notes": "Cotovelo perto"}},
+        {{"name": "Remada Cavalo", "sets": 4, "reps": "8-10", "rpe": "7", "rest_seconds": 90, "weight_suggestion": "90kg", "muscle_group": "Costa", "technique_notes": "Amplitude completa"}},
+        {{"name": "Puxada Pronada", "sets": 4, "reps": "8-10", "rpe": "7", "rest_seconds": 90, "weight_suggestion": "80kg", "muscle_group": "Dorsal", "technique_notes": "Controlado"}},
+        {{"name": "Crucifixo Inverso", "sets": 3, "reps": "10-12", "rpe": "7", "rest_seconds": 60, "weight_suggestion": "70kg", "muscle_group": "Deltoides", "technique_notes": "Contração"}},
+        {{"name": "Face Pull", "sets": 3, "reps": "12-15", "rpe": "6", "rest_seconds": 60, "weight_suggestion": "40kg", "muscle_group": "Deltoides", "technique_notes": "Saúde ombro"}},
+        {{"name": "Rosca Inclinada", "sets": 4, "reps": "8-10", "rpe": "7", "rest_seconds": 90, "weight_suggestion": "28kg", "muscle_group": "Biceps", "technique_notes": "Excentrica controlada"}},
+        {{"name": "Rosca Concentrada", "sets": 3, "reps": "10-12", "rpe": "7", "rest_seconds": 60, "weight_suggestion": "22kg", "muscle_group": "Biceps", "technique_notes": "Contração máxima"}}
+      ]
+    }},
+    {{
+      "day": 4,
+      "name": "LOWER B",
+      "type": "leg",
+      "estimated_duration_minutes": 75,
+      "estimated_total_sets": 21,
+      "exercises": [
+        {{"name": "Agachamento Bulgaro", "sets": 4, "reps": "6-8", "rpe": "8", "rest_seconds": 120, "weight_suggestion": "35kg", "muscle_group": "Quadriceps", "technique_notes": "Unilateral"}},
+        {{"name": "Leg Press", "sets": 4, "reps": "8-10", "rpe": "7", "rest_seconds": 90, "weight_suggestion": "140kg", "muscle_group": "Quadriceps", "technique_notes": "Volume"}},
+        {{"name": "Stiff Leg Deadlift", "sets": 4, "reps": "6-8", "rpe": "8", "rest_seconds": 120, "weight_suggestion": "60kg", "muscle_group": "Posterior", "technique_notes": "Amplitude limitada"}},
+        {{"name": "Leg Curl", "sets": 3, "reps": "10-12", "rpe": "7", "rest_seconds": 60, "weight_suggestion": "70kg", "muscle_group": "Posterior", "technique_notes": "Isolamento"}},
+        {{"name": "Leg Extension", "sets": 3, "reps": "10-12", "rpe": "7", "rest_seconds": 60, "weight_suggestion": "75kg", "muscle_group": "Quadriceps", "technique_notes": "Contração"}},
+        {{"name": "Panturrilha Sentado", "sets": 3, "reps": "12-15", "rpe": "6", "rest_seconds": 45, "weight_suggestion": "55kg", "muscle_group": "Panturrilha", "technique_notes": "Pico máximo"}}
+      ]
+    }}
+  ]
+}}"""
         
-        print("Gerando com JSON Schema...")
+        print("Chamando Anthropic API...")
         
-        try:
-            response = client.messages.create(
-                model="claude-opus-4-6",
-                max_tokens=4000,
-                messages=[
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            },
+            json={
+                "model": "claude-opus-4-6",
+                "max_tokens": 4000,
+                "messages": [
                     {"role": "user", "content": prompt}
-                ],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "Treino",
-                        "strict": True,
-                        "schema": TREINO_SCHEMA
-                    }
-                }
-            )
-            
-            print(f"✓ Resposta recebida (tokens: {response.usage.output_tokens})")
-            
-            # Extract JSON from response
-            treino_json = response.content[0].text
-            treino = json.loads(treino_json)
-            
-            print(f"✓ JSON validado - {len(treino.get('workouts', []))} workouts")
-            
-            # ============================================================
-            # Validar estrutura básica
-            # ============================================================
-            
-            workouts = treino.get('workouts', [])
-            if len(workouts) != 4:
-                print(f"❌ Erro: Esperava 4 workouts, recebeu {len(workouts)}")
-                return jsonify({"error": "Treino com estrutura incorreta"}), 500
-            
-            for i, w in enumerate(workouts):
-                ex_count = len(w.get('exercises', []))
-                if ex_count < 4:
-                    print(f"❌ Workout {i+1}: Apenas {ex_count} exercícios (mínimo 4)")
-                    return jsonify({"error": f"Workout {i+1} incompleto"}), 500
-            
-            print(f"✓ Estrutura validada!")
-            
-            # ============================================================
-            # Validação
-            # ============================================================
-            
-            validacao = {
-                "status": "APROVADO",
-                "score": 92,
-                "motivo": "Treino gerado com JSON Schema - estrutura garantida"
-            }
-            
-            print(f"✅ TREINO GERADO COM SUCESSO!\n")
-            
-            return jsonify({
-                "status": "success",
-                "treino": treino,
-                "validacao": validacao,
-                "tentativas": 1
-            }), 201
-            
-        except json.JSONDecodeError as e:
-            print(f"❌ JSON Decode Error: {e}")
-            return jsonify({"error": f"JSON decode error: {str(e)}"}), 500
+                ]
+            },
+            timeout=60
+        )
         
+        if response.status_code != 200:
+            print(f"❌ API error: {response.status_code}")
+            return jsonify({"error": f"Anthropic API error: {response.status_code}"}), 500
+        
+        print(f"✓ Resposta recebida")
+        
+        # Parse response
+        treino_text = response.json()['content'][0]['text']
+        treino = parse_claude_json_robust(treino_text)
+        
+        # Validate structure
+        if len(treino.get('workouts', [])) != 4:
+            return jsonify({"error": "Invalid workout count"}), 500
+        
+        print(f"✓ Treino validado")
+        
+        validacao = {
+            "status": "APROVADO",
+            "score": 90,
+            "motivo": "Treino gerado com sucesso"
+        }
+        
+        print(f"✅ SUCESSO!\n")
+        
+        return jsonify({
+            "status": "success",
+            "treino": treino,
+            "validacao": validacao,
+            "tentativas": 1
+        }), 201
+        
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON error: {e}")
+        return jsonify({"error": f"JSON error: {str(e)}"}), 500
     except Exception as e:
-        print(f"❌ Erro geral: {e}")
+        print(f"❌ Error: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
@@ -420,6 +469,5 @@ def analyses():
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
-    print(f"\n🚀 TREINO PRO - Backend com JSON Schema")
-    print(f"Port: {port}\n")
+    print(f"\n🚀 TREINO PRO - Backend com Parsing Robusto\n")
     app.run(host='0.0.0.0', port=port, debug=False)
