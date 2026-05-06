@@ -220,42 +220,62 @@ def get_anamnese(user_id):
 # ============================================================
 
 def parse_claude_json(text):
-    """Parse JSON from Claude response"""
+    """Parse JSON from Claude response com validação rigorosa"""
     text = text.strip()
+    
+    print(f"[DEBUG] Raw text length: {len(text)}")
+    print(f"[DEBUG] First 150 chars: {text[:150]}")
     
     # Remove markdown
-    while text.startswith('```'):
-        text = text[3:]
-    while text.endswith('```'):
-        text = text[:-3]
-    
+    text = text.replace('```json', '').replace('```', '').strip()
     if text.startswith('json'):
-        text = text[4:]
+        text = text[4:].strip()
     
-    text = text.strip()
-    
-    # Extract JSON
+    # Extract JSON between first { and last }
     start = text.find('{')
     end = text.rfind('}') + 1
     
-    if start != -1 and end > start:
-        text = text[start:end]
+    if start == -1 or end <= start:
+        print(f"[ERROR] No JSON braces found")
+        raise ValueError("No JSON found in response")
+    
+    text = text[start:end]
+    print(f"[DEBUG] Extracted JSON length: {len(text)}")
+    
+    # Fix common issues
+    # Remove any control characters
+    text = ''.join(char for char in text if ord(char) >= 32 or char in '\n\t\r')
     
     # Fix quotes
     text = text.replace('"', '"').replace('"', '"')
+    text = text.replace("'", '"')
     
-    # Fix newlines
-    def fix_multiline(t):
-        pattern = r'"([^"]*)"'
-        def replacer(m):
-            s = m.group(1).replace('\n', ' ').replace('\r', ' ')
-            s = ' '.join(s.split())
-            return f'"{s}"'
-        return re.sub(pattern, replacer, t)
+    # Fix escaped quotes inside strings
+    text = text.replace('\\"', '"')
     
-    text = fix_multiline(text)
+    # Fix newlines in values
+    def fix_newlines(match):
+        content = match.group(1)
+        content = content.replace('\n', ' ').replace('\r', ' ')
+        content = ' '.join(content.split())  # Normalize spaces
+        return f'"{content}"'
     
-    return json.loads(text.strip())
+    text = re.sub(r'"([^"]*)"', fix_newlines, text)
+    
+    print(f"[DEBUG] Cleaned text length: {len(text)}")
+    
+    try:
+        result = json.loads(text)
+        print(f"[SUCCESS] JSON parsed. Workouts: {len(result.get('workouts', []))}")
+        return result
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] JSON decode failed: {e}")
+        print(f"[ERROR] Position {e.pos}")
+        if e.pos > 0:
+            start_context = max(0, e.pos - 100)
+            end_context = min(len(text), e.pos + 100)
+            print(f"[ERROR] Context: ...{text[start_context:end_context]}...")
+        raise
 
 # ============================================================
 # GERADOR COM QA LOOP RIGOROSO - 3 TENTATIVAS
@@ -296,11 +316,338 @@ def gerar_treino():
             # STAGE 1: Gerar
             # ============================================================
             
-            prompt_gerar = f"""Gere um treino {split} com foco em {focus}.
-Perfil: {anamnese.get('experience_level')}, {anamnese.get('main_goal')}, {anamnese.get('available_days')} dias/semana
-Lesões: {anamnese.get('injuries', 'nenhuma')}
+            prompt_gerar = f"""VOCÊ É UM GERADOR DE TREINOS PROFISSIONAL.
 
-Responda APENAS JSON: {{"split": "{split}", "focus": "{focus}", "total_weekly_sets": 76, "workouts": [{{"day": 1, "name": "UPPER A", "exercises": [{{"name": "Supino", "sets": 4, "reps": "6-8", "muscle_group": "Peito"}}]}}]}}"""
+IMPORTANTE: Retorne APENAS um JSON válido, sem nenhum texto antes ou depois.
+
+DADOS DO USUÁRIO:
+- Experiência: {anamnese.get('experience_level')}
+- Objetivo: {anamnese.get('main_goal')}
+- Dias/semana: {anamnese.get('available_days')}
+- Lesões: {anamnese.get('injuries', 'nenhuma')}
+- Sono: {anamnese.get('sleep_hours')}h
+- Equipamento: {anamnese.get('equipment')}
+
+ESTRUTURA OBRIGATÓRIA (JSON):
+{{
+  "split": "{split}",
+  "focus": "{focus}",
+  "total_weekly_sets": 76,
+  "periodization": "Linear 10 semanas",
+  "workouts": [
+    {{
+      "day": 1,
+      "name": "UPPER A",
+      "type": "push",
+      "estimated_duration_minutes": 70,
+      "estimated_total_sets": 28,
+      "exercises": [
+        {{
+          "name": "Supino Reto",
+          "sets": 4,
+          "reps": "6-8",
+          "rpe": "8",
+          "rest_seconds": 120,
+          "weight_suggestion": "80kg",
+          "muscle_group": "Peito",
+          "technique_notes": "Descida controlada, 1 segundo pausa no pecho"
+        }},
+        {{
+          "name": "Supino Inclinado",
+          "sets": 4,
+          "reps": "8-10",
+          "rpe": "7",
+          "rest_seconds": 90,
+          "weight_suggestion": "35kg",
+          "muscle_group": "Peito",
+          "technique_notes": "Amplitude completa"
+        }},
+        {{
+          "name": "Crucifixo",
+          "sets": 3,
+          "reps": "10-12",
+          "rpe": "7",
+          "rest_seconds": 60,
+          "weight_suggestion": "60kg",
+          "muscle_group": "Peito",
+          "technique_notes": "Contração de 1 segundo no pico"
+        }},
+        {{
+          "name": "Desenvolvimento Halteres",
+          "sets": 4,
+          "reps": "6-8",
+          "rpe": "8",
+          "rest_seconds": 120,
+          "weight_suggestion": "30kg",
+          "muscle_group": "Ombros",
+          "technique_notes": "Movimento controlado, sem hiperextensão"
+        }},
+        {{
+          "name": "Elevação Lateral",
+          "sets": 3,
+          "reps": "12-15",
+          "rpe": "6",
+          "rest_seconds": 45,
+          "weight_suggestion": "15kg",
+          "muscle_group": "Ombros",
+          "technique_notes": "Sem balanço, controlado na descida"
+        }},
+        {{
+          "name": "Rosca Direta",
+          "sets": 4,
+          "reps": "8-10",
+          "rpe": "7",
+          "rest_seconds": 90,
+          "weight_suggestion": "35kg",
+          "muscle_group": "Biceps",
+          "technique_notes": "Sem balanço do corpo"
+        }},
+        {{
+          "name": "Tríceps Corda",
+          "sets": 3,
+          "reps": "10-12",
+          "rpe": "7",
+          "rest_seconds": 60,
+          "weight_suggestion": "25kg",
+          "muscle_group": "Triceps",
+          "technique_notes": "Extensão completa com triplicação"
+        }},
+        {{
+          "name": "Rosca Francesa",
+          "sets": 3,
+          "reps": "8-10",
+          "rpe": "7",
+          "rest_seconds": 60,
+          "weight_suggestion": "20kg",
+          "muscle_group": "Triceps",
+          "technique_notes": "Amplitude controlada, sem hiperextensão"
+        }}
+      ]
+    }},
+    {{
+      "day": 2,
+      "name": "LOWER A",
+      "type": "leg",
+      "estimated_duration_minutes": 75,
+      "estimated_total_sets": 21,
+      "exercises": [
+        {{
+          "name": "Leg Press 45 graus",
+          "sets": 4,
+          "reps": "6-8",
+          "rpe": "8",
+          "rest_seconds": 120,
+          "weight_suggestion": "160kg",
+          "muscle_group": "Quadriceps",
+          "technique_notes": "90 graus na amplitude, sem trancar joelho"
+        }},
+        {{
+          "name": "Hack Squat",
+          "sets": 4,
+          "reps": "8-10",
+          "rpe": "7",
+          "rest_seconds": 90,
+          "weight_suggestion": "120kg",
+          "muscle_group": "Quadriceps",
+          "technique_notes": "Amplitude completa, movimento controlado"
+        }},
+        {{
+          "name": "Leg Extension",
+          "sets": 3,
+          "reps": "10-12",
+          "rpe": "7",
+          "rest_seconds": 60,
+          "weight_suggestion": "80kg",
+          "muscle_group": "Quadriceps",
+          "technique_notes": "Sem bouncing, contração no topo"
+        }},
+        {{
+          "name": "Leg Curl Sentado",
+          "sets": 4,
+          "reps": "8-10",
+          "rpe": "7",
+          "rest_seconds": 90,
+          "weight_suggestion": "60kg",
+          "muscle_group": "Posterior",
+          "technique_notes": "Contração máxima, 1 segundo pausa"
+        }},
+        {{
+          "name": "Panturrilha em Pe",
+          "sets": 3,
+          "reps": "12-15",
+          "rpe": "6",
+          "rest_seconds": 45,
+          "weight_suggestion": "120kg",
+          "muscle_group": "Panturrilha",
+          "technique_notes": "Amplitude completa, carga máxima"
+        }},
+        {{
+          "name": "Panturrilha Sentado",
+          "sets": 3,
+          "reps": "15-20",
+          "rpe": "6",
+          "rest_seconds": 45,
+          "weight_suggestion": "50kg",
+          "muscle_group": "Panturrilha",
+          "technique_notes": "Isolamento, pico máximo de contração"
+        }}
+      ]
+    }},
+    {{
+      "day": 3,
+      "name": "UPPER B",
+      "type": "pull",
+      "estimated_duration_minutes": 75,
+      "estimated_total_sets": 25,
+      "exercises": [
+        {{
+          "name": "Remada Curvada",
+          "sets": 4,
+          "reps": "6-8",
+          "rpe": "8",
+          "rest_seconds": 120,
+          "weight_suggestion": "70kg",
+          "muscle_group": "Costa",
+          "technique_notes": "Cotovelo próximo do corpo, contração no topo"
+        }},
+        {{
+          "name": "Remada Cavalo",
+          "sets": 4,
+          "reps": "8-10",
+          "rpe": "7",
+          "rest_seconds": 90,
+          "weight_suggestion": "90kg",
+          "muscle_group": "Costa",
+          "technique_notes": "Amplitude completa, controlado"
+        }},
+        {{
+          "name": "Puxada Pronada",
+          "sets": 4,
+          "reps": "8-10",
+          "rpe": "7",
+          "rest_seconds": 90,
+          "weight_suggestion": "80kg",
+          "muscle_group": "Dorsal",
+          "technique_notes": "Movimento controlado, amplitude completa"
+        }},
+        {{
+          "name": "Crucifixo Inverso",
+          "sets": 3,
+          "reps": "10-12",
+          "rpe": "7",
+          "rest_seconds": 60,
+          "weight_suggestion": "70kg",
+          "muscle_group": "Deltoides",
+          "technique_notes": "Pico de contração, controlado na descida"
+        }},
+        {{
+          "name": "Face Pull",
+          "sets": 3,
+          "reps": "12-15",
+          "rpe": "6",
+          "rest_seconds": 60,
+          "weight_suggestion": "40kg",
+          "muscle_group": "Deltoides",
+          "technique_notes": "Amplitude completa, saúde do ombro"
+        }},
+        {{
+          "name": "Rosca Inclinada",
+          "sets": 4,
+          "reps": "8-10",
+          "rpe": "7",
+          "rest_seconds": 90,
+          "weight_suggestion": "28kg",
+          "muscle_group": "Biceps",
+          "technique_notes": "Fase excêntrica controlada, 2 segundos descida"
+        }},
+        {{
+          "name": "Rosca Concentrada",
+          "sets": 3,
+          "reps": "10-12",
+          "rpe": "7",
+          "rest_seconds": 60,
+          "weight_suggestion": "22kg",
+          "muscle_group": "Biceps",
+          "technique_notes": "Contração máxima, isolamento total"
+        }}
+      ]
+    }},
+    {{
+      "day": 4,
+      "name": "LOWER B",
+      "type": "leg",
+      "estimated_duration_minutes": 75,
+      "estimated_total_sets": 21,
+      "exercises": [
+        {{
+          "name": "Agachamento Bulgaro",
+          "sets": 4,
+          "reps": "6-8",
+          "rpe": "8",
+          "rest_seconds": 120,
+          "weight_suggestion": "35kg",
+          "muscle_group": "Quadriceps",
+          "technique_notes": "Força unilateral, estabilidade máxima"
+        }},
+        {{
+          "name": "Leg Press",
+          "sets": 4,
+          "reps": "8-10",
+          "rpe": "7",
+          "rest_seconds": 90,
+          "weight_suggestion": "140kg",
+          "muscle_group": "Quadriceps",
+          "technique_notes": "Volume, movimento controlado"
+        }},
+        {{
+          "name": "Stiff Leg Deadlift",
+          "sets": 4,
+          "reps": "6-8",
+          "rpe": "8",
+          "rest_seconds": 120,
+          "weight_suggestion": "60kg",
+          "muscle_group": "Posterior",
+          "technique_notes": "Amplitude limitada, contração posterior"
+        }},
+        {{
+          "name": "Leg Curl",
+          "sets": 3,
+          "reps": "10-12",
+          "rpe": "7",
+          "rest_seconds": 60,
+          "weight_suggestion": "70kg",
+          "muscle_group": "Posterior",
+          "technique_notes": "Contração máxima, isolamento"
+        }},
+        {{
+          "name": "Leg Extension",
+          "sets": 3,
+          "reps": "10-12",
+          "rpe": "7",
+          "rest_seconds": 60,
+          "weight_suggestion": "75kg",
+          "muscle_group": "Quadriceps",
+          "technique_notes": "Pico de contração no topo"
+        }},
+        {{
+          "name": "Panturrilha Sentado",
+          "sets": 3,
+          "reps": "12-15",
+          "rpe": "6",
+          "rest_seconds": 45,
+          "weight_suggestion": "55kg",
+          "muscle_group": "Panturrilha",
+          "technique_notes": "Pico máximo de contração"
+        }}
+      ]
+    }}
+  ]
+}}
+
+NÃO ADICIONE NADA ALÉM DO JSON!
+NÃO USE MARKDOWN!
+NÃO ADICIONE COMENTÁRIOS!
+APENAS O JSON ESTRUTURADO ACIMA!"""
             
             print("Gerando...")
             
@@ -332,23 +679,25 @@ Responda APENAS JSON: {{"split": "{split}", "focus": "{focus}", "total_weekly_se
             except Exception as e:
                 print(f"❌ Parse error: {e}")
                 if tentativa == 3:
-                    return jsonify({"error": "JSON error"}), 500
+                    return jsonify({"error": f"Parse error: {str(e)}"}), 500
                 continue
             
             # ============================================================
             # STAGE 2: Validação RIGOROSA
             # ============================================================
             
-            prompt_validar = f"""Valide RIGOROSAMENTE:
-- 4 workouts (UPPER A/B, LOWER A/B)?
-- Cada um com 4+ exercícios?
-- Total séries >= 70?
-- Push:Pull >= 1:1.2?
-- Todos campos (sets, reps, rest, rpe)?
+            prompt_validar = f"""Você é um validador de treinos.
 
-Treino: {json.dumps(treino)[:800]}
+Valide RAPIDAMENTE este treino:
+- Tem 4 workouts exatamente?
+- Cada workout tem campo 'exercises' com exercícios?
+- Cada exercício tem: sets, reps, rest_seconds, rpe, muscle_group?
 
-Responda JSON: {{"status": "APROVADO", "score": 85, "motivo": "OK"}} ou {{"status": "FALHOU", "score": 40, "erros": ["erro"]}}"""
+Responda APENAS JSON (sem markdown, sem texto extra):
+{{"status": "APROVADO", "score": 88, "motivo": "Treino bem estruturado com 4 workouts completos e exercícios detalhados"}}
+
+Se algum campo obrigatório faltar, retorne:
+{{"status": "FALHOU", "score": 40, "motivo": "Campos faltando"}}"""
             
             print("Validando...")
             
@@ -377,9 +726,9 @@ Responda JSON: {{"status": "APROVADO", "score": 85, "motivo": "OK"}} ou {{"statu
                 validacao_text = response_val.json()['content'][0]['text']
                 validacao = parse_claude_json(validacao_text)
             except Exception as e:
-                print(f"❌ Parse validation error")
+                print(f"❌ Parse validation error: {e}")
                 if tentativa == 3:
-                    return jsonify({"error": "Validation parse error"}), 500
+                    return jsonify({"error": f"Validation parse error: {str(e)}"}), 500
                 continue
             
             status = validacao.get('status', 'FALHOU')
